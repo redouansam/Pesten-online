@@ -1,0 +1,121 @@
+import { StyleSheet } from "react-native";
+
+export const sharedStyles = StyleSheet.create({
+  screen: {
+    flex: 1,
+    backgroundColor: "#06140f",
+  },
+  background: {
+    flex: 1,
+  },
+  screenTransition: {
+    flex: 1,
+  },
+  keyboardScreen: {
+    flex: 1,
+  },
+  connectionPill: {
+    alignSelf: "center",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "#edf7f0",
+    paddingVertical: 8,
+    paddingHorizontal: 13,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "#c8ded1",
+  },
+  connectionPillDark: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "rgba(6,20,15,0.88)",
+    paddingVertical: 8,
+    paddingHorizontal: 13,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.14)",
+  },
+  connectionDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 999,
+  },
+  connectionDotOn: {
+    backgroundColor: "#22c55e",
+  },
+  connectionDotOff: {
+    backgroundColor: "#ef4444",
+  },
+  connectionText: {
+    color: "#17352a",
+    fontWeight: "800",
+    fontSize: 12,
+  },
+  connectionTextDark: {
+    color: "#f7f1e8",
+    fontWeight: "800",
+    fontSize: 12,
+  },
+  inputLabel: {
+    color: "#17352a",
+    fontWeight: "800",
+    fontSize: 13,
+  },
+  input: {
+    backgroundColor: "#ffffff",
+    borderWidth: 1,
+    borderColor: "#d8c5a7",
+    borderRadius: 14,
+    paddingVertical: 13,
+    paddingHorizontal: 14,
+    fontSize: 16,
+    color: "#111827",
+    fontWeight: "700",
+  },
+  codeInput: {
+    backgroundColor: "#ffffff",
+    borderWidth: 1,
+    borderColor: "#bfa77f",
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    fontSize: 24,
+    color: "#111827",
+    fontWeight: "800",
+    letterSpacing: 3,
+    textAlign: "center",
+  },
+  disabledButton: {
+    opacity: 0.45,
+  },
+  errorBanner: {
+    backgroundColor: "#fff1f2",
+    borderWidth: 1,
+    borderColor: "#fda4af",
+    borderRadius: 16,
+    paddingVertical: 11,
+    paddingHorizontal: 13,
+  },
+  errorBannerText: {
+    color: "#991b1b",
+    fontWeight: "900",
+    fontSize: 12,
+    textAlign: "center",
+  },
+  loadingBanner: {
+    backgroundColor: "#ecfdf5",
+    borderWidth: 1,
+    borderColor: "#a7f3d0",
+    borderRadius: 16,
+    paddingVertical: 10,
+    paddingHorizontal: 13,
+  },
+  loadingBannerText: {
+    color: "#065f46",
+    fontWeight: "900",
+    fontSize: 12,
+    textAlign: "center",
+  },
+});

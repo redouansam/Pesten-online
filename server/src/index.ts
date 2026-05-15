@@ -13,6 +13,7 @@ import {
   moveToNextPlayer,
   passTurn,
   playCard,
+  redrawDrawnCard,
   reorderHand,
   resetToLobby,
   sortHand,
@@ -43,6 +44,14 @@ function isValidSuit(value: unknown): value is Suit {
   return typeof value === "string" && validSuits.includes(value as Suit);
 }
 
+function sanitizePlayerName(name: unknown) {
+  if (typeof name !== "string") return "Speler";
+
+  const trimmedName = name.trim().slice(0, 18);
+
+  return trimmedName || "Speler";
+}
+
 app.get("/", (_req, res) => {
   res.send("Pesten multiplayer server draait");
 });
@@ -51,6 +60,8 @@ function sendRoomUpdate(roomCode: string) {
   const room = rooms.get(roomCode);
 
   if (!room) return;
+
+  assignNewHostIfNeeded(room);
 
   for (const player of room.players) {
     if (!player.socketId) continue;
@@ -86,6 +97,26 @@ function assignNewHostIfNeeded(room: GameRoom) {
   }
 }
 
+function clearForcedTurnState(room: GameRoom, message?: string) {
+  const isForcedTurn =
+    room.turnState === "after_draw" ||
+    room.turnState === "must_play" ||
+    room.turnState === "seven_chain";
+
+  if (!isForcedTurn) return false;
+
+  room.turnState = "normal";
+  room.sevenSuit = undefined;
+  room.sevenStopAfterNext = false;
+  room.redrawOffer = undefined;
+
+  if (message) {
+    room.lastMessage = message;
+  }
+
+  return true;
+}
+
 function skipDisconnectedCurrentPlayer(room: GameRoom) {
   if (!room.started || room.winnerId) return;
 
@@ -96,6 +127,13 @@ function skipDisconnectedCurrentPlayer(room: GameRoom) {
     !getCurrentPlayer(room).connected &&
     attempts < room.players.length
   ) {
+    const skippedPlayer = getCurrentPlayer(room);
+
+    clearForcedTurnState(
+      room,
+      `${skippedPlayer?.name ?? "Een speler"} is offline; de beurt gaat door.`
+    );
+
     moveToNextPlayer(room);
     attempts++;
   }
@@ -121,7 +159,9 @@ function removePlayerFromRoom(roomCode: string, playerId: string) {
 
   if (!room) return;
 
+  const currentPlayerBeforeLeave = getCurrentPlayer(room);
   const leavingPlayer = room.players.find((player) => player.id === playerId);
+  const leavingWasCurrentPlayer = currentPlayerBeforeLeave?.id === playerId;
 
   room.players = room.players.filter((player) => player.id !== playerId);
   delete room.hands[playerId];
@@ -132,11 +172,29 @@ function removePlayerFromRoom(roomCode: string, playerId: string) {
     return;
   }
 
-  clampCurrentPlayerIndex(room);
+  if (!leavingWasCurrentPlayer && currentPlayerBeforeLeave) {
+    const currentPlayerIndex = room.players.findIndex(
+      (player) => player.id === currentPlayerBeforeLeave.id
+    );
+
+    room.currentPlayerIndex = currentPlayerIndex === -1 ? 0 : currentPlayerIndex;
+  } else {
+    clampCurrentPlayerIndex(room);
+  }
+
+  const clearedForcedTurn =
+    leavingWasCurrentPlayer &&
+    clearForcedTurnState(
+      room,
+      `${leavingPlayer?.name ?? "Een speler"} heeft de kamer verlaten; de beurt gaat door.`
+    );
+
   assignNewHostIfNeeded(room);
   skipDisconnectedCurrentPlayer(room);
 
-  room.lastMessage = `${leavingPlayer?.name ?? "Een speler"} heeft de kamer verlaten.`;
+  if (!clearedForcedTurn) {
+    room.lastMessage = `${leavingPlayer?.name ?? "Een speler"} heeft de kamer verlaten.`;
+  }
 
   sendRoomUpdate(roomCode);
 }
@@ -155,7 +213,7 @@ io.on("connection", (socket) => {
   console.log("Speler verbonden:", socket.id);
 
   socket.on("create_room", ({ name }: { name: string }) => {
-    const playerName = name?.trim() || "Speler";
+    const playerName = sanitizePlayerName(name);
     const code = generateRoomCode([...rooms.keys()]);
     const player = createPlayer(socket.id, playerName);
 
@@ -178,7 +236,7 @@ io.on("connection", (socket) => {
 
   socket.on("join_room", ({ code, name }: { code: string; name: string }) => {
     const roomCode = code?.trim().toUpperCase();
-    const playerName = name?.trim() || "Speler";
+    const playerName = sanitizePlayerName(name);
 
     const room = rooms.get(roomCode);
 
@@ -211,6 +269,25 @@ io.on("connection", (socket) => {
       code: roomCode,
       playerId: player.id,
     });
+
+    sendRoomUpdate(roomCode);
+  });
+
+  socket.on("update_name", ({ name }: { name: string }) => {
+    const roomCode = socketToRoom.get(socket.id);
+    const playerId = socketToPlayerId.get(socket.id);
+
+    if (!roomCode || !playerId) return;
+
+    const room = rooms.get(roomCode);
+
+    if (!room || room.started) return;
+
+    const player = room.players.find((item) => item.id === playerId);
+
+    if (!player) return;
+
+    player.name = sanitizePlayerName(name);
 
     sendRoomUpdate(roomCode);
   });
@@ -289,15 +366,18 @@ io.on("connection", (socket) => {
     }
 
     const connectedPlayers = room.players.filter((player) => player.connected);
-    const allReady = connectedPlayers.every((player) => player.ready);
+    const connectedGuests = connectedPlayers.filter(
+      (player) => player.id !== room.hostId
+    );
+    const allGuestsReady = connectedGuests.every((player) => player.ready);
 
     if (connectedPlayers.length < 2) {
       socket.emit("error_message", "Je hebt minimaal 2 spelers nodig");
       return;
     }
 
-    if (!allReady) {
-      socket.emit("error_message", "Iedereen moet eerst klaar zijn");
+    if (!allGuestsReady) {
+      socket.emit("error_message", "Alle gasten moeten eerst klaar zijn");
       return;
     }
 
@@ -377,6 +457,27 @@ io.on("connection", (socket) => {
       socket.emit(
         "error_message",
         error instanceof Error ? error.message : "Passen mislukt"
+      );
+    }
+  });
+
+  socket.on("redraw_drawn_card", () => {
+    const roomCode = socketToRoom.get(socket.id);
+    const playerId = socketToPlayerId.get(socket.id);
+
+    if (!roomCode || !playerId) return;
+
+    const room = rooms.get(roomCode);
+
+    if (!room) return;
+
+    try {
+      redrawDrawnCard(room, playerId);
+      sendRoomUpdate(roomCode);
+    } catch (error) {
+      socket.emit(
+        "error_message",
+        error instanceof Error ? error.message : "Nieuwe pakkaart mislukt"
       );
     }
   });

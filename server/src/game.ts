@@ -19,6 +19,7 @@ const values: Card["value"][] = [
 ];
 
 const pestCards: Card["value"][] = ["A", "2", "7", "8", "J", "K", "JOKER"];
+const redrawCostGems = 5;
 
 export function generateRoomCode(existingCodes: string[]) {
   let code = "";
@@ -36,6 +37,7 @@ export function createRoom(code: string, host: Player): GameRoom {
     hostId: host.id,
     players: [host],
     started: false,
+    roundId: 0,
 
     deck: [],
     discardPile: [],
@@ -122,12 +124,14 @@ export function startGame(room: GameRoom) {
   room.turnState = "normal";
   room.sevenSuit = undefined;
   room.sevenStopAfterNext = false;
+  room.redrawOffer = undefined;
 
   room.winnerId = undefined;
   room.lastMessage = "Kaarten worden gedeeld...";
   room.rematchVotes = {};
 
   room.started = true;
+  room.roundId += 1;
 
   for (const player of room.players) {
     player.ready = false;
@@ -160,6 +164,7 @@ export function resetToLobby(room: GameRoom) {
   room.turnState = "normal";
   room.sevenSuit = undefined;
   room.sevenStopAfterNext = false;
+  room.redrawOffer = undefined;
   room.winnerId = undefined;
   room.lastMessage = undefined;
   room.rematchVotes = {};
@@ -216,6 +221,27 @@ function hasCardOfValue(
   return hand.some((card) => card.value === value);
 }
 
+function isPlayableSevenInChain(room: GameRoom, card: Card) {
+  if (card.value !== "7") return false;
+  if (!room.sevenSuit) return false;
+
+  const topCard = getTopCard(room);
+
+  return card.suit === room.sevenSuit || topCard?.value === "7";
+}
+
+function hasPlayableSevenInChain(
+  room: GameRoom,
+  playerId: string,
+  exceptCardId?: string
+) {
+  const hand = room.hands[playerId] ?? [];
+
+  return hand.some(
+    (card) => card.id !== exceptCardId && isPlayableSevenInChain(room, card)
+  );
+}
+
 function isSevenSameValueFinish(
   room: GameRoom,
   playerId: string,
@@ -236,8 +262,17 @@ function isSevenSameValueFinish(
     room.sevenSuit,
     card.id
   );
+  const stillHasPlayableSeven = hasPlayableSevenInChain(
+    room,
+    playerId,
+    card.id
+  );
 
-  return !stillHasSevenSuit && card.value === topCard.value;
+  return (
+    !stillHasSevenSuit &&
+    !stillHasPlayableSeven &&
+    card.value === topCard.value
+  );
 }
 
 export function canPlayCard(room: GameRoom, card: Card, playerId?: string) {
@@ -248,10 +283,10 @@ export function canPlayCard(room: GameRoom, card: Card, playerId?: string) {
 
   if (room.turnState === "seven_chain") {
     if (card.suit === room.sevenSuit) return true;
+    if (isPlayableSevenInChain(room, card)) return true;
 
     if (!activePlayerId) return false;
     if (!room.sevenSuit) return false;
-    if (card.value === "7") return false;
 
     const stillHasSevenSuit = hasOtherCardOfSuit(
       room,
@@ -259,8 +294,17 @@ export function canPlayCard(room: GameRoom, card: Card, playerId?: string) {
       room.sevenSuit,
       card.id
     );
+    const stillHasPlayableSeven = hasPlayableSevenInChain(
+      room,
+      activePlayerId,
+      card.id
+    );
 
-    return !stillHasSevenSuit && card.value === topCard.value;
+    return (
+      !stillHasSevenSuit &&
+      !stillHasPlayableSeven &&
+      card.value === topCard.value
+    );
   }
 
   if (room.pendingDraw > 0) {
@@ -337,12 +381,14 @@ export function playCard(
   hand.splice(cardIndex, 1);
   room.discardPile.push(card);
   room.lastMessage = undefined;
+  room.redrawOffer = undefined;
 
   const effect = applyCardEffect(room, card, chosenSuit);
 
   if (hand.length === 0) {
     if (isPestCard(card) && !wasSevenChain) {
       drawAmountToPlayer(room, playerId, 2);
+      room.pendingDraw = 0;
 
       room.lastMessage = `${getPlayerName(
         room,
@@ -450,7 +496,10 @@ function resolveSevenStart(room: GameRoom, playerId: string, card: Card) {
     return;
   }
 
-  if (!hasCardOfSuit(room, playerId, card.suit)) {
+  if (
+    !hasCardOfSuit(room, playerId, card.suit) &&
+    !hasCardOfValue(room, playerId, "7")
+  ) {
     drawAmountToPlayer(room, playerId, 1);
 
     room.lastMessage = `${getPlayerName(
@@ -471,7 +520,7 @@ function resolveSevenStart(room: GameRoom, playerId: string, card: Card) {
   room.lastMessage = `${getPlayerName(
     room,
     playerId
-  )} moet nu kaarten van hetzelfde symbool leggen.`;
+  )} moet nu hetzelfde symbool of nog een 7 leggen.`;
 }
 
 function resolveSevenChainAfterCard(
@@ -513,6 +562,35 @@ function resolveSevenChainAfterCard(
     return;
   }
 
+  if (card.value === "7") {
+    const canContinueWithSuit = hasCardOfSuit(room, playerId, card.suit);
+    const canContinueWithSeven = hasCardOfValue(room, playerId, "7");
+
+    if (!canContinueWithSuit && !canContinueWithSeven) {
+      drawAmountToPlayer(room, playerId, 1);
+
+      room.lastMessage = `${getPlayerName(
+        room,
+        playerId
+      )} legde een 7 maar kon niet verder en pakt 1 strafkaart.`;
+
+      room.turnState = "normal";
+      room.sevenSuit = undefined;
+      room.sevenStopAfterNext = false;
+      moveToNextPlayer(room);
+      return;
+    }
+
+    room.turnState = "seven_chain";
+    room.sevenSuit = card.suit;
+    room.sevenStopAfterNext = false;
+    room.lastMessage = `${getPlayerName(
+      room,
+      playerId
+    )} mag hetzelfde symbool of nog een 7 leggen.`;
+    return;
+  }
+
   if (isPestCard(card)) {
     room.turnState = "normal";
     room.sevenSuit = undefined;
@@ -523,13 +601,14 @@ function resolveSevenChainAfterCard(
 
   const topCard = getTopCard(room);
   const canContinueWithSuit = hasCardOfSuit(room, playerId, suit);
+  const canContinueWithSeven = hasPlayableSevenInChain(room, playerId);
   const canFinishWithSameValue = hasCardOfValue(room, playerId, topCard?.value);
 
-  if (canContinueWithSuit || canFinishWithSameValue) {
+  if (canContinueWithSuit || canContinueWithSeven || canFinishWithSameValue) {
     room.turnState = "seven_chain";
     room.sevenStopAfterNext = false;
 
-    if (!canContinueWithSuit && canFinishWithSameValue) {
+    if (!canContinueWithSuit && !canContinueWithSeven && canFinishWithSameValue) {
       room.lastMessage = `${getPlayerName(
         room,
         playerId
@@ -587,11 +666,12 @@ export function drawCards(room: GameRoom, playerId: string) {
 
   const amount = room.pendingDraw > 0 ? room.pendingDraw : 1;
 
-  drawAmountToPlayer(room, playerId, amount);
+  const drawnCards = drawAmountToPlayer(room, playerId, amount);
 
   room.pendingDraw = 0;
   room.sevenSuit = undefined;
   room.sevenStopAfterNext = false;
+  room.redrawOffer = undefined;
 
   if (hasPlayableCard(room, playerId)) {
     room.turnState = "after_draw";
@@ -606,6 +686,22 @@ export function drawCards(room: GameRoom, playerId: string) {
             room,
             playerId
           )} pakte 1 kaart en mag nu leggen of passen.`;
+
+    return;
+  }
+
+  if (amount === 1 && drawnCards.length === 1) {
+    room.turnState = "after_draw";
+    room.redrawOffer = {
+      playerId,
+      cardId: drawnCards[0].id,
+      attempts: 0,
+    };
+
+    room.lastMessage = `${getPlayerName(
+      room,
+      playerId
+    )} pakte 1 kaart maar kan niks leggen. Nieuwe pakkaart mogelijk.`;
 
     return;
   }
@@ -645,9 +741,77 @@ export function passTurn(room: GameRoom, playerId: string) {
   room.turnState = "normal";
   room.sevenSuit = undefined;
   room.sevenStopAfterNext = false;
+  room.redrawOffer = undefined;
   room.lastMessage = `${getPlayerName(room, playerId)} past de beurt.`;
 
   moveToNextPlayer(room);
+}
+
+export function redrawDrawnCard(room: GameRoom, playerId: string) {
+  if (!room.started) {
+    throw new Error("Game is nog niet gestart");
+  }
+
+  if (room.winnerId) {
+    throw new Error("Game is al klaar");
+  }
+
+  const currentPlayer = getCurrentPlayer(room);
+
+  if (!currentPlayer || currentPlayer.id !== playerId) {
+    throw new Error("Je bent niet aan de beurt");
+  }
+
+  if (room.turnState !== "after_draw") {
+    throw new Error("Je kunt nu geen nieuwe pakkaart proberen");
+  }
+
+  if (room.redrawOffer?.playerId !== playerId) {
+    throw new Error("Er is geen pakkaart om te vervangen");
+  }
+
+  const hand = room.hands[playerId];
+
+  if (!hand) {
+    throw new Error("Hand niet gevonden");
+  }
+
+  const oldCardIndex = hand.findIndex(
+    (card) => card.id === room.redrawOffer?.cardId
+  );
+
+  if (oldCardIndex === -1) {
+    throw new Error("De pakkaart is niet meer beschikbaar");
+  }
+
+  const [oldCard] = hand.splice(oldCardIndex, 1);
+
+  ensureDeckHasCards(room);
+
+  const newCard = room.deck.shift();
+
+  if (!newCard) {
+    hand.splice(oldCardIndex, 0, oldCard);
+    throw new Error("Er zijn geen kaarten meer om te pakken");
+  }
+
+  room.deck.push(oldCard);
+  hand.push(newCard);
+  room.lastMessage = `${getPlayerName(
+    room,
+    playerId
+  )} verving de pakkaart met gems.`;
+
+  if (hasPlayableCard(room, playerId)) {
+    room.redrawOffer = undefined;
+    return;
+  }
+
+  room.redrawOffer = {
+    playerId,
+    cardId: newCard.id,
+    attempts: room.redrawOffer.attempts + 1,
+  };
 }
 
 export function reorderHand(room: GameRoom, playerId: string, cardIds: string[]) {
@@ -680,7 +844,7 @@ export function reorderHand(room: GameRoom, playerId: string, cardIds: string[])
 export function sortHand(
   room: GameRoom,
   playerId: string,
-  _mode: "suit" | "value"
+  mode: "suit" | "value"
 ) {
   const hand = room.hands[playerId];
 
@@ -715,15 +879,22 @@ export function sortHand(
   hand.sort((a, b) => {
     const suitDiff =
       (suitOrder[a.suit ?? ""] ?? 99) - (suitOrder[b.suit ?? ""] ?? 99);
+    const valueDiff = valueOrder[a.value] - valueOrder[b.value];
+
+    if (mode === "value") {
+      if (valueDiff !== 0) return valueDiff;
+      return suitDiff;
+    }
 
     if (suitDiff !== 0) return suitDiff;
 
-    return valueOrder[a.value] - valueOrder[b.value];
+    return valueDiff;
   });
 }
 
 function drawAmountToPlayer(room: GameRoom, playerId: string, amount: number) {
   const hand = room.hands[playerId];
+  const drawnCards: Card[] = [];
 
   if (!hand) {
     throw new Error("Hand niet gevonden");
@@ -736,8 +907,11 @@ function drawAmountToPlayer(room: GameRoom, playerId: string, amount: number) {
 
     if (card) {
       hand.push(card);
+      drawnCards.push(card);
     }
   }
+
+  return drawnCards;
 }
 
 function ensureDeckHasCards(room: GameRoom) {
@@ -793,6 +967,7 @@ export function getPublicRoomState(room: GameRoom, playerId: string) {
       cardCount: room.hands[player.id]?.length ?? 0,
     })),
     started: room.started,
+    roundId: room.roundId,
 
     hand: room.hands[playerId] ?? [],
     topCard: getTopCard(room),
@@ -805,6 +980,12 @@ export function getPublicRoomState(room: GameRoom, playerId: string) {
     turnState: room.turnState,
     sevenSuit: room.sevenSuit,
     sevenStopAfterNext: room.sevenStopAfterNext,
+    canRedrawDrawnCard:
+      isCurrentPlayer &&
+      !room.winnerId &&
+      room.turnState === "after_draw" &&
+      room.redrawOffer?.playerId === playerId,
+    redrawCostGems,
 
     canDraw:
       isCurrentPlayer &&

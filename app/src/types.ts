@@ -22,52 +22,12 @@ export type Card = {
   value: CardValue;
 };
 
-export type Player = {
-  id: string;
-  socketId: string;
-  name: string;
-  connected: boolean;
-  ready: boolean;
-};
-
 export type TurnState =
   | "normal"
   | "after_draw"
   | "must_play"
   | "seven_chain"
   | "finished";
-
-export type GameRoom = {
-  code: string;
-  hostId: string;
-  players: Player[];
-  started: boolean;
-  roundId: number;
-
-  deck: Card[];
-  discardPile: Card[];
-  hands: Record<string, Card[]>;
-
-  currentPlayerIndex: number;
-  direction: 1 | -1;
-
-  pendingDraw: number;
-  chosenSuit?: Suit;
-
-  turnState: TurnState;
-  sevenSuit?: Suit;
-  sevenStopAfterNext?: boolean;
-  redrawOffer?: {
-    playerId: string;
-    cardId: string;
-    attempts: number;
-  };
-
-  winnerId?: string;
-  lastMessage?: string;
-
-  rematchVotes: Record<string, boolean>;
-};
 
 export type PublicPlayer = {
   id: string;
