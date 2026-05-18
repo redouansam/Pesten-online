@@ -1,6 +1,6 @@
 import * as Haptics from "expo-haptics";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Keyboard, Platform } from "react-native";
 
 import {
@@ -20,8 +20,16 @@ type PendingAction =
   | "redraw"
   | null;
 
-export function useRoomSocket() {
+export type ConnectionState =
+  | "connecting"
+  | "online"
+  | "offline"
+  | "reconnecting";
+
+export function useRoomSocket(hapticsEnabled = true) {
   const [connected, setConnected] = useState(false);
+  const [connectionState, setConnectionState] =
+    useState<ConnectionState>("connecting");
   const [playerId, setPlayerId] = useState("");
   const [name, setLocalName] = useState("Speler");
   const [hasSavedName, setHasSavedName] = useState(false);
@@ -29,6 +37,11 @@ export function useRoomSocket() {
   const [room, setRoom] = useState<PublicRoomState | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingAction>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const hapticsEnabledRef = useRef(hapticsEnabled);
+
+  useEffect(() => {
+    hapticsEnabledRef.current = hapticsEnabled;
+  }, [hapticsEnabled]);
 
   useEffect(() => {
     async function loadProfileName() {
@@ -59,14 +72,30 @@ export function useRoomSocket() {
 
     function onConnect() {
       setConnected(true);
+      setConnectionState("online");
       setErrorMessage(null);
       tryReconnect().catch(() => {});
     }
 
     function onDisconnect() {
       setConnected(false);
+      setConnectionState("offline");
       setPendingAction(null);
       setErrorMessage("Verbinding met de server is weggevallen.");
+    }
+
+    function onReconnectAttempt() {
+      setConnectionState("reconnecting");
+    }
+
+    function onReconnect() {
+      setConnectionState("online");
+      setErrorMessage(null);
+    }
+
+    function onReconnectFailed() {
+      setConnectionState("offline");
+      setErrorMessage("Opnieuw verbinden lukt niet. Check je netwerk.");
     }
 
     async function saveSession(data: { code: string; playerId: string }) {
@@ -93,10 +122,11 @@ export function useRoomSocket() {
       saveSession(data).catch(() => {});
     }
 
-    function onReconnectFailed() {
+    function onSessionReconnectFailed() {
       sessionStore.multiRemove([STORAGE_PLAYER_ID, STORAGE_ROOM_CODE]).catch(
         () => {}
       );
+      setErrorMessage("Kamer niet gevonden. Maak of join opnieuw.");
     }
 
     function onRoomUpdated(updatedRoom: PublicRoomState) {
@@ -108,9 +138,11 @@ export function useRoomSocket() {
     function onErrorMessage(message: string) {
       setPendingAction(null);
       setErrorMessage(message);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(
-        () => {}
-      );
+      if (hapticsEnabledRef.current) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(
+          () => {}
+        );
+      }
     }
 
     socket.on("connect", onConnect);
@@ -118,9 +150,12 @@ export function useRoomSocket() {
     socket.on("room_created", onRoomCreated);
     socket.on("room_joined", onRoomJoined);
     socket.on("reconnected", onReconnected);
-    socket.on("reconnect_failed", onReconnectFailed);
+    socket.on("reconnect_failed", onSessionReconnectFailed);
     socket.on("room_updated", onRoomUpdated);
     socket.on("error_message", onErrorMessage);
+    socket.io.on("reconnect_attempt", onReconnectAttempt);
+    socket.io.on("reconnect", onReconnect);
+    socket.io.on("reconnect_failed", onReconnectFailed);
 
     return () => {
       socket.off("connect", onConnect);
@@ -128,9 +163,12 @@ export function useRoomSocket() {
       socket.off("room_created", onRoomCreated);
       socket.off("room_joined", onRoomJoined);
       socket.off("reconnected", onReconnected);
-      socket.off("reconnect_failed", onReconnectFailed);
+      socket.off("reconnect_failed", onSessionReconnectFailed);
       socket.off("room_updated", onRoomUpdated);
       socket.off("error_message", onErrorMessage);
+      socket.io.off("reconnect_attempt", onReconnectAttempt);
+      socket.io.off("reconnect", onReconnect);
+      socket.io.off("reconnect_failed", onReconnectFailed);
       socket.disconnect();
     };
   }, []);
@@ -144,19 +182,24 @@ export function useRoomSocket() {
     Keyboard.dismiss();
     setPendingAction("create");
     setErrorMessage(null);
-    Haptics.selectionAsync().catch(() => {});
+    if (hapticsEnabled) Haptics.selectionAsync().catch(() => {});
     socket.emit("create_room", {
       name,
     });
   }
 
   function joinRoom() {
+    const normalizedRoomCode = roomCodeInput
+      .trim()
+      .toUpperCase()
+      .replace(/\s/g, "");
+
     if (!connected) {
       setErrorMessage("Server niet verbonden. Probeer het zo opnieuw.");
       return;
     }
 
-    if (roomCodeInput.trim().length < 5) {
+    if (normalizedRoomCode.length < 5) {
       setErrorMessage("Vul eerst de volledige kamercode in.");
       return;
     }
@@ -164,9 +207,9 @@ export function useRoomSocket() {
     Keyboard.dismiss();
     setPendingAction("join");
     setErrorMessage(null);
-    Haptics.selectionAsync().catch(() => {});
+    if (hapticsEnabled) Haptics.selectionAsync().catch(() => {});
     socket.emit("join_room", {
-      code: roomCodeInput,
+      code: normalizedRoomCode,
       name,
     });
   }
@@ -174,16 +217,18 @@ export function useRoomSocket() {
   function toggleReady() {
     setPendingAction("ready");
     setErrorMessage(null);
-    Haptics.selectionAsync().catch(() => {});
+    if (hapticsEnabled) Haptics.selectionAsync().catch(() => {});
     socket.emit("toggle_ready");
   }
 
   function startGame() {
     setPendingAction("start");
     setErrorMessage(null);
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(
-      () => {}
-    );
+    if (hapticsEnabled) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(
+        () => {}
+      );
+    }
     socket.emit("start_game");
   }
 
@@ -205,19 +250,19 @@ export function useRoomSocket() {
   }
 
   function drawCards() {
-    Haptics.selectionAsync().catch(() => {});
+    if (hapticsEnabled) Haptics.selectionAsync().catch(() => {});
     socket.emit("draw_cards");
   }
 
   function passTurn() {
-    Haptics.selectionAsync().catch(() => {});
+    if (hapticsEnabled) Haptics.selectionAsync().catch(() => {});
     socket.emit("pass_turn");
   }
 
   function redrawDrawnCard() {
     setPendingAction("redraw");
     setErrorMessage(null);
-    Haptics.selectionAsync().catch(() => {});
+    if (hapticsEnabled) Haptics.selectionAsync().catch(() => {});
     socket.emit("redraw_drawn_card");
   }
 
@@ -229,6 +274,12 @@ export function useRoomSocket() {
 
   function clearError() {
     setErrorMessage(null);
+  }
+
+  function retryConnection() {
+    setConnectionState("connecting");
+    setErrorMessage(null);
+    socket.connect();
   }
 
   function setName(value: string) {
@@ -247,6 +298,7 @@ export function useRoomSocket() {
 
   return {
     connected,
+    connectionState,
     playerId,
     name,
     hasSavedName,
@@ -257,6 +309,7 @@ export function useRoomSocket() {
     pendingAction,
     errorMessage,
     clearError,
+    retryConnection,
     createRoom,
     joinRoom,
     toggleReady,

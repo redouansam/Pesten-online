@@ -7,6 +7,11 @@ import {
   starterCardBackIds,
 } from "../cardBackImages";
 import {
+  defaultTableSkinId,
+  starterTableSkinIds,
+  tableSkinOptions,
+} from "../tableSkins";
+import {
   COINS_PER_GEM_PACK,
   DAILY_GEMS,
   DAILY_LOGIN_COINS,
@@ -17,7 +22,9 @@ import {
   GEM_PACK_COST,
   Wallet,
   defaultWallet,
+  getMilestoneProgress,
   getSeasonProgress,
+  milestoneRewards,
   seasonRewards,
 } from "../economy";
 
@@ -45,16 +52,36 @@ function normalizeWallet(value: Partial<Wallet> | null): Wallet {
   )
     ? value?.selectedCardBackId ?? defaultCardBackId
     : defaultCardBackId;
+  const premiumTableSkinIds = value?.premiumPass
+    ? tableSkinOptions
+        .filter((tableSkin) => tableSkin.premium)
+        .map((tableSkin) => tableSkin.id)
+    : [];
+  const ownedTableSkinIds = Array.from(
+    new Set([
+      ...starterTableSkinIds,
+      ...premiumTableSkinIds,
+      ...(value?.ownedTableSkinIds ?? []),
+    ])
+  );
+  const selectedTableSkinId = ownedTableSkinIds.includes(
+    value?.selectedTableSkinId ?? ""
+  )
+    ? value?.selectedTableSkinId ?? defaultTableSkinId
+    : defaultTableSkinId;
 
   return {
     ...defaultWallet,
     ...value,
     selectedCardBackId,
     ownedCardBackIds,
+    selectedTableSkinId,
+    ownedTableSkinIds,
     gamesPlayed: value?.gamesPlayed ?? 0,
     wins: value?.wins ?? 0,
     winStreak: value?.winStreak ?? 0,
     bestWinStreak: value?.bestWinStreak ?? 0,
+    claimedMilestoneRewards: value?.claimedMilestoneRewards ?? [],
     claimedSeasonRewards: value?.claimedSeasonRewards ?? [],
     rewardedRounds: value?.rewardedRounds ?? [],
   };
@@ -245,6 +272,64 @@ export function useEconomy() {
     setNotice(`${cardBack.title} gekocht en ingesteld.`);
   }
 
+  function selectTableSkin(tableSkinId: string) {
+    const tableSkin = tableSkinOptions.find((item) => item.id === tableSkinId);
+
+    if (!tableSkin) return;
+
+    const isOwned =
+      wallet.ownedTableSkinIds.includes(tableSkin.id) ||
+      (tableSkin.premium && wallet.premiumPass);
+
+    if (!isOwned) {
+      setNotice(
+        tableSkin.premium
+          ? "Deze tafel hoort bij de premium pass."
+          : "Koop deze tafel eerst."
+      );
+      return;
+    }
+
+    setWallet((currentWallet) => ({
+      ...currentWallet,
+      selectedTableSkinId: tableSkin.id,
+    }));
+    setNotice(`${tableSkin.title} is nu je tafel.`);
+  }
+
+  function buyTableSkin(tableSkinId: string) {
+    const tableSkin = tableSkinOptions.find((item) => item.id === tableSkinId);
+
+    if (!tableSkin) return;
+
+    if (wallet.ownedTableSkinIds.includes(tableSkin.id)) {
+      selectTableSkin(tableSkin.id);
+      return;
+    }
+
+    if (tableSkin.premium) {
+      setNotice("Premium tafels komen later met de premium pass.");
+      return;
+    }
+
+    const priceCoins = tableSkin.priceCoins ?? 0;
+
+    if (wallet.coins < priceCoins) {
+      setNotice(`Je hebt ${priceCoins} coins nodig voor ${tableSkin.title}.`);
+      return;
+    }
+
+    setWallet((currentWallet) => ({
+      ...currentWallet,
+      coins: Math.max(0, currentWallet.coins - priceCoins),
+      ownedTableSkinIds: [
+        ...new Set([...currentWallet.ownedTableSkinIds, tableSkin.id]),
+      ],
+      selectedTableSkinId: tableSkin.id,
+    }));
+    setNotice(`${tableSkin.title} gekocht en ingesteld.`);
+  }
+
   function recordGameResult(roundKey: string, didWin: boolean) {
     const rewardKey = `round-${roundKey}`;
 
@@ -316,6 +401,41 @@ export function useEconomy() {
     setNotice(`${reward.title} geclaimd.`);
   }
 
+  function claimMilestoneReward(rewardId: string) {
+    const reward = milestoneRewards.find((item) => item.id === rewardId);
+
+    if (!reward) return;
+
+    if (wallet.claimedMilestoneRewards.includes(reward.id)) {
+      setNotice("Dit doel is al geclaimd.");
+      return;
+    }
+
+    const progress = getMilestoneProgress(wallet, reward);
+
+    if (progress < reward.target) {
+      setNotice(`Nog ${reward.target - progress} stap te gaan voor ${reward.title}.`);
+      return;
+    }
+
+    setWallet((currentWallet) => ({
+      ...currentWallet,
+      coins: currentWallet.coins + (reward.coins ?? 0),
+      gems: currentWallet.gems + (reward.gems ?? 0),
+      claimedMilestoneRewards: [
+        ...currentWallet.claimedMilestoneRewards,
+        reward.id,
+      ],
+    }));
+
+    const rewards = [
+      reward.coins ? `+${reward.coins} coins` : null,
+      reward.gems ? `+${reward.gems} gems` : null,
+    ].filter(Boolean);
+
+    setNotice(`${reward.title} geclaimd: ${rewards.join(" en ")}.`);
+  }
+
   return {
     wallet,
     season,
@@ -332,7 +452,10 @@ export function useEconomy() {
     previewGemPurchase,
     buyCardBack,
     selectCardBack,
+    buyTableSkin,
+    selectTableSkin,
     recordGameResult,
     claimSeasonReward,
+    claimMilestoneReward,
   };
 }

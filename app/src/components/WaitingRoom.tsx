@@ -3,6 +3,7 @@ import * as Haptics from "expo-haptics";
 import { Alert, Pressable, ScrollView, Share, Text, View } from "react-native";
 
 import { styles } from "../styles";
+import type { ConnectionState } from "../hooks/useRoomSocket";
 import { PublicPlayer, PublicRoomState } from "../types";
 
 export function WaitingRoom({
@@ -12,9 +13,12 @@ export function WaitingRoom({
   startGame,
   toggleReady,
   leaveRoom,
+  connectionState,
+  retryConnection,
   pendingAction,
   errorMessage,
   clearError,
+  hapticsEnabled,
 }: {
   room: PublicRoomState;
   playerId: string;
@@ -22,9 +26,12 @@ export function WaitingRoom({
   startGame: () => void;
   toggleReady: () => void;
   leaveRoom: () => void | Promise<void>;
+  connectionState: ConnectionState;
+  retryConnection: () => void;
   pendingAction: string | null;
   errorMessage: string | null;
   clearError: () => void;
+  hapticsEnabled: boolean;
 }) {
   const me = room.players.find((player) => player.id === playerId);
   const connectedPlayers = room.players.filter((player) => player.connected);
@@ -46,12 +53,30 @@ export function WaitingRoom({
   const readyPending = pendingAction === "ready";
   const startPending = pendingAction === "start";
   const startHint = !isHost
-    ? "Klik klaar. De host start daarna de game."
+    ? "Zet jezelf klaar."
     : !hasEnoughPlayers
-    ? "Nodig minimaal een extra speler uit."
+    ? "Nodig iemand uit."
     : !guestsReady
-    ? "Wacht tot alle gasten klaar zijn."
-    : "Iedereen is klaar. Start wanneer je wilt.";
+    ? "Wacht op klaar."
+    : "Start de tafel.";
+  const nextStepTitle = !isHost
+    ? me?.ready
+      ? "Je bent klaar"
+      : "Zet klaar"
+    : canStart
+    ? "Start nu"
+    : !hasEnoughPlayers
+    ? "Deel code"
+    : "Bijna klaar";
+  const nextStepText = !isHost
+    ? me?.ready
+      ? "Host start zo."
+      : "Tik onderaan."
+    : canStart
+    ? "Iedereen is klaar."
+    : !hasEnoughPlayers
+    ? "Minimaal 2 spelers."
+    : `${readyCount}/${readyTotal} klaar`;
 
   const slots: Array<PublicPlayer | null> = [...room.players];
 
@@ -61,15 +86,34 @@ export function WaitingRoom({
 
   async function copyCode() {
     await Clipboard.setStringAsync(room.code);
-    Haptics.selectionAsync().catch(() => {});
+    if (hapticsEnabled) Haptics.selectionAsync().catch(() => {});
     Alert.alert("Gekopieerd", `Kamer code ${room.code} is gekopieerd.`);
   }
 
   async function shareCode() {
-    Haptics.selectionAsync().catch(() => {});
+    if (hapticsEnabled) Haptics.selectionAsync().catch(() => {});
     await Share.share({
       message: `Join mijn Pesten kamer met code: ${room.code}`,
     });
+  }
+
+  function handleToggleReady() {
+    if (hapticsEnabled) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    }
+    toggleReady();
+  }
+
+  function handleStartGame() {
+    if (hapticsEnabled) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+    }
+    startGame();
+  }
+
+  function handleLeaveRoom() {
+    if (hapticsEnabled) Haptics.selectionAsync().catch(() => {});
+    leaveRoom();
   }
 
   return (
@@ -81,9 +125,7 @@ export function WaitingRoom({
         <View style={styles.lobbyHeader}>
           <View>
             <Text style={styles.lobbyEyebrow}>Wachtkamer</Text>
-            <Text style={styles.lobbyTitle}>
-              {isHost ? "Jij bent host" : "Bijna klaar"}
-            </Text>
+            <Text style={styles.lobbyTitle}>Team klaar?</Text>
             <Text style={styles.lobbySubtitle}>{startHint}</Text>
           </View>
 
@@ -96,7 +138,7 @@ export function WaitingRoom({
 
         <View style={styles.codeHeroCard}>
           <View>
-            <Text style={styles.codeLabel}>Kamer code</Text>
+            <Text style={styles.codeLabel}>Kamercode</Text>
             <Text style={styles.codeValue}>{room.code}</Text>
           </View>
 
@@ -110,6 +152,29 @@ export function WaitingRoom({
             </Pressable>
           </View>
         </View>
+
+        {connectionState !== "online" ? (
+          <View style={styles.connectionHelpCard}>
+            <View style={styles.connectionHelpCopy}>
+              <Text style={styles.connectionHelpTitle}>
+                {connectionState === "reconnecting"
+                  ? "Opnieuw verbinden"
+                  : connectionState === "connecting"
+                  ? "Verbinden..."
+                  : "Offline"}
+              </Text>
+              <Text style={styles.connectionHelpText}>
+                Room blijft bewaard als je terugkomt.
+              </Text>
+            </View>
+            <Pressable
+              style={styles.connectionRetryButton}
+              onPress={retryConnection}
+            >
+              <Text style={styles.connectionRetryText}>Retry</Text>
+            </Pressable>
+          </View>
+        ) : null}
 
         {errorMessage ? (
           <Pressable style={styles.errorBanner} onPress={clearError}>
@@ -129,10 +194,20 @@ export function WaitingRoom({
           </View>
         ) : null}
 
+        <View style={styles.roomStepCard}>
+          <View style={styles.roomStepBadge}>
+            <Text style={styles.roomStepBadgeText}>Nu</Text>
+          </View>
+          <View style={styles.roomStepCopy}>
+            <Text style={styles.roomStepTitle}>{nextStepTitle}</Text>
+            <Text style={styles.roomStepText}>{nextStepText}</Text>
+          </View>
+        </View>
+
         <View style={styles.readyCard}>
           <View style={styles.readyTopRow}>
             <Text style={styles.readyTitle}>
-              {isHost ? "Gasten klaar" : "Jouw status"}
+              Klaar
             </Text>
             <Text style={styles.readyNumber}>
               {readyCount}/{readyTotal}
@@ -144,11 +219,23 @@ export function WaitingRoom({
           </View>
         </View>
 
+        <View style={styles.roomFactsRow}>
+          <View style={styles.roomFactChip}>
+            <Text style={styles.roomFactText}>2-4 spelers</Text>
+          </View>
+          <View style={styles.roomFactChip}>
+            <Text style={styles.roomFactText}>Klaar = start</Text>
+          </View>
+          <View style={styles.roomFactChip}>
+            <Text style={styles.roomFactText}>Geen pest-finish</Text>
+          </View>
+        </View>
+
         <View style={styles.playersSection}>
           <View style={styles.playerListTitleRow}>
             <Text style={styles.playerListTitle}>Spelers</Text>
             <Text style={styles.playerListMeta}>
-              {connectedPlayers.length} online
+              {connectedPlayers.length}/4 online
             </Text>
           </View>
 
@@ -161,8 +248,7 @@ export function WaitingRoom({
                   </View>
 
                   <View style={styles.emptySlotCopy}>
-                    <Text style={styles.emptySlotTitle}>Vrije plek</Text>
-                    <Text style={styles.emptySlotText}>Nodig iemand uit</Text>
+                    <Text style={styles.emptySlotTitle}>Open plek</Text>
                   </View>
                 </View>
               );
@@ -245,7 +331,7 @@ export function WaitingRoom({
                 me?.ready && styles.readyCtaButtonOn,
                 readyPending && styles.disabledButton,
               ]}
-              onPress={toggleReady}
+              onPress={handleToggleReady}
               disabled={readyPending}
             >
               <Text
@@ -254,7 +340,7 @@ export function WaitingRoom({
                   me?.ready && styles.readyCtaTextOn,
                 ]}
               >
-                {readyPending ? "Even wachten..." : me?.ready ? "Klaar" : "Ik ben klaar"}
+                {readyPending ? "..." : me?.ready ? "Klaar" : "Klaar zetten"}
               </Text>
             </Pressable>
           ) : null}
@@ -265,21 +351,21 @@ export function WaitingRoom({
                 styles.startButton,
                 (!canStart || startPending) && styles.disabledButton,
               ]}
-              onPress={startGame}
+              onPress={handleStartGame}
               disabled={!canStart || startPending}
             >
               <Text style={styles.startButtonText}>
-                {startPending ? "Starten..." : "Start game"}
+                {startPending ? "Start..." : "Start"}
               </Text>
             </Pressable>
           ) : (
             <View style={styles.hostWaitingBox}>
-              <Text style={styles.hostWaitingText}>Wachten op de host</Text>
+              <Text style={styles.hostWaitingText}>Host start</Text>
             </View>
           )}
 
-          <Pressable style={styles.leaveButtonWide} onPress={leaveRoom}>
-            <Text style={styles.leaveButtonText}>Kamer verlaten</Text>
+          <Pressable style={styles.leaveButtonWide} onPress={handleLeaveRoom}>
+            <Text style={styles.leaveButtonText}>Verlaat</Text>
           </Pressable>
         </View>
       </View>

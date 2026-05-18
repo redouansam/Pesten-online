@@ -6,12 +6,12 @@ export function getTurnText(room: PublicRoomState) {
   }
 
   if (room.turnState === "must_play") {
-    return "Heer: leg nog één kaart";
+    return "Heer: leg nog een kaart";
   }
 
   if (room.turnState === "seven_chain") {
     if (room.sevenStopAfterNext) {
-      return "Heer in 7: leg nog één kaart";
+      return "Heer in 7: leg nog een kaart";
     }
 
     return "7 actief: zelfde symbool, direct na 7 mag nog een 7";
@@ -61,7 +61,10 @@ export function isCardPlayable(room: PublicRoomState, card: Card) {
   const activeSuit = room.chosenSuit ?? topCard.suit;
 
   if (card.value === "J") {
-    return Boolean(card.suit && activeSuit && card.suit === activeSuit);
+    return (
+      topCard.value === "J" ||
+      Boolean(card.suit && activeSuit && card.suit === activeSuit)
+    );
   }
 
   return card.value === topCard.value || card.suit === activeSuit;

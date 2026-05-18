@@ -23,7 +23,10 @@ import {
   suitShortLabels,
 } from "../constants";
 import { getTurnText, isCardPlayable } from "../gameRules";
+import type { ConnectionState } from "../hooks/useRoomSocket";
+import type { CardSizeSetting, MotionSetting } from "../settings";
 import { styles } from "../styles";
+import type { TableSkinOption } from "../tableSkins";
 import { Card, PublicPlayer, PublicRoomState, Suit } from "../types";
 
 export function GameTable({
@@ -36,8 +39,16 @@ export function GameTable({
   playCard,
   playAgain,
   leaveRoom,
+  connectionState,
+  errorMessage,
+  clearError,
+  retryConnection,
   gems,
   cardBackImage,
+  tableSkin,
+  hapticsEnabled,
+  cardSize,
+  motionLevel,
   redrawDrawnCard,
 }: {
   room: PublicRoomState;
@@ -49,8 +60,16 @@ export function GameTable({
   playCard: (card: Card, chosenSuit?: Suit) => void;
   playAgain: (wantsAgain: boolean) => void;
   leaveRoom: () => void | Promise<void>;
+  connectionState: ConnectionState;
+  errorMessage: string | null;
+  clearError: () => void;
+  retryConnection: () => void;
   gems: number;
   cardBackImage: ImageSourcePropType;
+  tableSkin: TableSkinOption;
+  hapticsEnabled: boolean;
+  cardSize: CardSizeSetting;
+  motionLevel: MotionSetting;
   redrawDrawnCard: () => void;
 }) {
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
@@ -66,31 +85,37 @@ export function GameTable({
   const wasYourTurnRef = useRef(false);
   const previousHandCountRef = useRef(room.hand.length);
   const previousTopCardIdRef = useRef(room.topCard?.id);
+  const autoPassNoGemsRef = useRef(false);
 
   useEffect(() => {
     if (isYourTurn && !wasYourTurnRef.current && !winnerName) {
-      Haptics.selectionAsync().catch(() => {});
+      if (hapticsEnabled) Haptics.selectionAsync().catch(() => {});
     }
 
     wasYourTurnRef.current = isYourTurn;
-  }, [isYourTurn, winnerName]);
+  }, [hapticsEnabled, isYourTurn, winnerName]);
 
   useEffect(() => {
+    if (motionLevel === "low") {
+      handAnim.setValue(1);
+      return;
+    }
+
     handAnim.setValue(0);
 
     Animated.timing(handAnim, {
       toValue: 1,
-      duration: 260,
+      duration: 220,
       useNativeDriver: true,
     }).start();
-  }, [room.hand.length, handAnim]);
+  }, [handAnim, motionLevel, room.hand.length]);
 
   useEffect(() => {
     const previousCount = previousHandCountRef.current;
 
     previousHandCountRef.current = room.hand.length;
 
-    if (room.hand.length <= previousCount) return;
+    if (room.hand.length <= previousCount || motionLevel === "low") return;
 
     deckPulseAnim.setValue(0);
 
@@ -106,7 +131,7 @@ export function GameTable({
         useNativeDriver: true,
       }),
     ]).start();
-  }, [deckPulseAnim, room.hand.length]);
+  }, [deckPulseAnim, motionLevel, room.hand.length]);
 
   useEffect(() => {
     const topCardId = room.topCard?.id;
@@ -114,6 +139,12 @@ export function GameTable({
     if (!topCardId || previousTopCardIdRef.current === topCardId) return;
 
     previousTopCardIdRef.current = topCardId;
+
+    if (motionLevel === "low") {
+      discardAnim.setValue(1);
+      return;
+    }
+
     discardAnim.setValue(0);
 
     Animated.spring(discardAnim, {
@@ -122,7 +153,7 @@ export function GameTable({
       tension: 90,
       useNativeDriver: true,
     }).start();
-  }, [discardAnim, room.topCard?.id]);
+  }, [discardAnim, motionLevel, room.topCard?.id]);
 
   useEffect(() => {
     if (!cardHint) return;
@@ -131,6 +162,36 @@ export function GameTable({
 
     return () => clearTimeout(timer);
   }, [cardHint]);
+
+  useEffect(() => {
+    if (
+      !isYourTurn ||
+      !room.canRedrawDrawnCard ||
+      room.winnerId ||
+      gems >= room.redrawCostGems
+    ) {
+      autoPassNoGemsRef.current = false;
+      return;
+    }
+
+    if (autoPassNoGemsRef.current) return;
+
+    autoPassNoGemsRef.current = true;
+    showCardHint("Geen speelbare pakkaart en te weinig gems. Beurt gaat door.");
+
+    const timer = setTimeout(() => {
+      passTurn();
+    }, 650);
+
+    return () => clearTimeout(timer);
+  }, [
+    gems,
+    isYourTurn,
+    passTurn,
+    room.canRedrawDrawnCard,
+    room.redrawCostGems,
+    room.winnerId,
+  ]);
 
   const me = room.players.find((player) => player.id === playerId);
   const others = room.players.filter((player) => player.id !== playerId);
@@ -145,35 +206,43 @@ export function GameTable({
 
   const handLayout = useMemo(() => {
     const maxGameWidth = Math.min(screenWidth, 560);
-    const handAreaWidth = Math.max(280, maxGameWidth - 70);
+    const handAreaWidth = Math.max(280, maxGameWidth - 58);
     const cardCount = Math.max(sortedHand.length, 1);
-    const baseCardWidth = Math.min(100, Math.max(76, maxGameWidth * 0.2));
+    const sizeScale =
+      cardSize === "compact" ? 0.88 : cardSize === "large" ? 1.12 : 1;
+    const baseCardWidth =
+      Math.min(102, Math.max(74, maxGameWidth * 0.2)) * sizeScale;
     const denseCardWidth =
-      cardCount > 13 ? 70 : cardCount > 10 ? 78 : baseCardWidth;
+      cardCount > 17
+        ? 62
+        : cardCount > 13
+        ? 70
+        : cardCount > 10
+        ? 80
+        : baseCardWidth;
     const cardWidth = Math.min(baseCardWidth, denseCardWidth);
     const cardHeight = cardWidth * 1.42;
-    const minFanStep = cardCount > 18 ? 9 : cardCount > 13 ? 11 : 14;
-    const fanStep =
+    const cardStep =
       cardCount > 1
         ? Math.max(
-            minFanStep,
+            4,
             Math.min(
-              cardWidth * 0.56,
+              cardWidth * 0.48,
               (handAreaWidth - cardWidth) / (cardCount - 1)
             )
           )
         : 0;
-    const fanWidth = cardWidth + fanStep * (cardCount - 1);
+    const fanWidth = cardWidth + cardStep * (cardCount - 1);
 
     return {
       cardWidth,
       cardHeight,
       fanWidth,
-      overlap: Math.max(0, cardWidth - fanStep),
-      angleStep: cardCount > 1 ? Math.min(2.8, 18 / cardCount) : 0,
+      cardStep,
+      angleStep: cardCount > 1 ? Math.min(1.2, 8 / cardCount) : 0,
       handHeight: cardHeight + 36,
     };
-  }, [screenWidth, sortedHand.length]);
+  }, [cardSize, screenWidth, sortedHand.length]);
 
   const opponentLayout =
     others.length <= 1
@@ -199,6 +268,8 @@ export function GameTable({
   function showCardHint(message: string) {
     setCardHint(message);
     invalidShakeAnim.setValue(0);
+
+    if (motionLevel === "low") return;
 
     Animated.sequence([
       Animated.timing(invalidShakeAnim, {
@@ -228,9 +299,11 @@ export function GameTable({
     }
 
     if (!isCardPlayable(room, card)) {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(
-        () => {}
-      );
+      if (hapticsEnabled) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(
+          () => {}
+        );
+      }
       showCardHint("Deze kaart mag nu niet op de stapel.");
       return;
     }
@@ -240,7 +313,7 @@ export function GameTable({
       return;
     }
 
-    Haptics.selectionAsync().catch(() => {});
+    if (hapticsEnabled) Haptics.selectionAsync().catch(() => {});
     playCard(card);
   }
 
@@ -248,7 +321,8 @@ export function GameTable({
     if (!room.canRedrawDrawnCard) return;
 
     if (gems < room.redrawCostGems) {
-      showCardHint(`Je hebt ${room.redrawCostGems} gems nodig.`);
+      showCardHint("Niet genoeg gems. Je beurt wordt gepast.");
+      passTurn();
       return;
     }
 
@@ -258,7 +332,7 @@ export function GameTable({
   function chooseSuitForJack(suit: Suit) {
     if (!pendingJackCard) return;
 
-    Haptics.selectionAsync().catch(() => {});
+    if (hapticsEnabled) Haptics.selectionAsync().catch(() => {});
     playCard(pendingJackCard, suit);
     setPendingJackCard(null);
   }
@@ -287,19 +361,40 @@ export function GameTable({
         </View>
 
         <Pressable style={styles.exitMiniButton} onPress={leaveRoom}>
-          <Text style={styles.exitMiniText}>Verlaat</Text>
+          <Text style={styles.exitMiniText}>Exit</Text>
         </Pressable>
       </View>
 
+      {connectionState !== "online" || errorMessage ? (
+        <Pressable
+          style={styles.gameConnectionBanner}
+          onPress={errorMessage ? clearError : retryConnection}
+        >
+          <Text style={styles.gameConnectionText} numberOfLines={1}>
+            {errorMessage ??
+              (connectionState === "reconnecting"
+                ? "Opnieuw verbinden..."
+                : connectionState === "connecting"
+                ? "Verbinden..."
+                : "Offline - tik om opnieuw te verbinden")}
+          </Text>
+        </Pressable>
+      ) : null}
+
       <View style={styles.tableWrapper}>
         <LinearGradient
-          colors={["#4a3324", "#1d1510", "#4a3324"]}
+          colors={tableSkin.railColors}
           style={styles.woodTable}
         >
           <View style={styles.tableShadow}>
             <LinearGradient
-              colors={["#0f704a", "#0a4c35", "#06291f"]}
-              style={styles.greenTable}
+              colors={tableSkin.feltColors}
+              style={[
+                styles.greenTable,
+                {
+                  borderColor: tableSkin.accentColor,
+                },
+              ]}
             >
               <View pointerEvents="none" style={styles.tableGlow} />
               <View pointerEvents="none" style={styles.tableInnerLine} />
@@ -441,7 +536,7 @@ export function GameTable({
               <View style={styles.tableHud}>
                 <View style={styles.tableHudPill}>
                   <Text style={styles.directionText}>
-                    {room.direction === 1 ? "↻" : "↺"}
+                    {room.direction === 1 ? "Mee" : "Terug"}
                   </Text>
                 </View>
 
@@ -489,8 +584,7 @@ export function GameTable({
           <View style={styles.meInfo}>
             <Text style={styles.meName}>{me?.name ?? "Jij"}</Text>
             <Text style={styles.meSub}>
-              {room.hand.length} kaarten ·{" "}
-              {isYourTurn ? "jij bent aan de beurt" : "wachten"}
+              {room.hand.length} kaarten - {isYourTurn ? "beurt" : "wacht"}
             </Text>
           </View>
 
@@ -539,13 +633,14 @@ export function GameTable({
         </View>
 
         <View style={styles.handToolbar}>
-          <Text style={styles.handTitle}>Jouw hand</Text>
+          <Text style={styles.handTitle}>Hand</Text>
 
           <View style={styles.handToolbarRight}>
+            <Text style={styles.handSortLabel}>Symbool</Text>
             <Text style={styles.handMeta}>
               {isYourTurn
                 ? `${playableCardsCount} speelbaar`
-                : "wachten op beurt"}
+                : "wacht"}
             </Text>
           </View>
         </View>
@@ -599,7 +694,6 @@ export function GameTable({
                 const centerIndex = (sortedHand.length - 1) / 2;
                 const distanceFromCenter = index - centerIndex;
                 const fanAngle = distanceFromCenter * handLayout.angleStep;
-                const restingLift = Math.abs(distanceFromCenter) * 1.4;
 
                 return (
                   <HandCard
@@ -609,8 +703,9 @@ export function GameTable({
                     playable={playable}
                     layout={handLayout}
                     fanAngle={fanAngle}
-                    restingLift={restingLift}
                     isDragging={draggingCardId === card.id}
+                    hapticsEnabled={hapticsEnabled}
+                    motionLevel={motionLevel}
                     onPress={handleCardPress}
                     onDragStart={() => setDraggingCardId(card.id)}
                     onDragEnd={() => setDraggingCardId(null)}
@@ -628,7 +723,7 @@ export function GameTable({
             <Text style={styles.modalTitle}>Kies een symbool</Text>
 
             <Text style={styles.modalText}>
-              Je hebt een Boer gelegd. Kies nu het nieuwe symbool.
+              Boer gespeeld.
             </Text>
 
             <View style={styles.modalSuitGrid}>
@@ -667,25 +762,31 @@ export function GameTable({
       <Modal visible={Boolean(winnerName)} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Game klaar</Text>
+            <View style={styles.winnerHero}>
+              <Text style={styles.winnerHeroEyebrow}>Winnaar</Text>
+              <Text style={styles.winnerHeroTitle}>{winnerName}</Text>
+              <Text style={styles.winnerHeroText}>
+                Beloningen bijgewerkt.
+              </Text>
+            </View>
 
             <Text style={styles.modalText}>
-              {winnerName} heeft gewonnen. Nog een potje?
+              Nog een potje?
             </Text>
 
             <Pressable
               style={styles.modalYesButton}
               onPress={() => playAgain(true)}
             >
-              <Text style={styles.modalYesButtonText}>Ja, opnieuw spelen</Text>
+              <Text style={styles.modalYesButtonText}>Opnieuw</Text>
             </Pressable>
 
             <Pressable style={styles.cancelButton} onPress={() => playAgain(false)}>
-              <Text style={styles.cancelButtonText}>Nee, terug naar lobby</Text>
+              <Text style={styles.cancelButtonText}>Lobby</Text>
             </Pressable>
 
             <Text style={styles.voteText}>
-              Wachten op spelers:{" "}
+              Stemmen:{" "}
               {room.players.filter((player) => room.rematchVotes[player.id])
                 .length}
               /{room.players.filter((player) => player.connected).length}
@@ -701,7 +802,7 @@ type HandLayout = {
   cardWidth: number;
   cardHeight: number;
   fanWidth: number;
-  overlap: number;
+  cardStep: number;
   angleStep: number;
   handHeight: number;
 };
@@ -754,44 +855,44 @@ function getTurnCoachText({
   winnerName?: string;
 }) {
   if (winnerName) {
-    return `${winnerName} heeft gewonnen. Kies of je opnieuw wilt spelen.`;
+    return `${winnerName} wint.`;
   }
 
   if (!isYourTurn) {
-    return `${currentPlayerName ?? "Een speler"} is bezig. Bereid je hand alvast voor.`;
+    return `${currentPlayerName ?? "Speler"} is bezig.`;
   }
 
   if (room.pendingDraw > 0) {
-    return `Je moet +${room.pendingDraw} pakken of een stapelkaart spelen.`;
+    return `+${room.pendingDraw} pakken of stapelen.`;
   }
 
   if (room.turnState === "after_draw") {
     if (room.canRedrawDrawnCard) {
-      return `Geen speelbare pakkaart. Probeer een nieuwe voor ${room.redrawCostGems} gems of pas.`;
+      return `Nieuwe kaart: ${room.redrawCostGems} gems of pas.`;
     }
 
     return room.canPass
-      ? "Speel de getrokken kaart of pas je beurt."
-      : "Je trok een speelbare kaart. Leg hem op tafel.";
+      ? "Speel of pas."
+      : "Leg je pakkaart.";
   }
 
   if (room.turnState === "seven_chain") {
-    return "7-reeks actief. Leg hetzelfde symbool; direct na een 7 mag nog een 7.";
+    return "7-reeks: zelfde symbool of 7.";
   }
 
   if (playableCardsCount > 0) {
-    return "Tik of sleep een gemarkeerde kaart naar de tafel.";
+    return "Tik of sleep speelbaar.";
   }
 
   if (room.canDraw) {
-    return "Geen speelbare kaart. Pak van de stapel.";
+    return "Pak een kaart.";
   }
 
   if (room.canPass) {
-    return "Je mag passen om je beurt door te geven.";
+    return "Passen mag.";
   }
 
-  return "Wacht even op de tafel.";
+  return "Even wachten.";
 }
 
 function HandCard({
@@ -800,8 +901,9 @@ function HandCard({
   playable,
   layout,
   fanAngle,
-  restingLift,
   isDragging,
+  hapticsEnabled,
+  motionLevel,
   onPress,
   onDragStart,
   onDragEnd,
@@ -811,8 +913,9 @@ function HandCard({
   playable: boolean;
   layout: HandLayout;
   fanAngle: number;
-  restingLift: number;
   isDragging: boolean;
+  hapticsEnabled: boolean;
+  motionLevel: MotionSetting;
   onPress: (card: Card) => void;
   onDragStart: () => void;
   onDragEnd: () => void;
@@ -821,6 +924,11 @@ function HandCard({
   const entryAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
+    if (motionLevel === "low") {
+      entryAnim.setValue(1);
+      return;
+    }
+
     entryAnim.setValue(0);
 
     Animated.spring(entryAnim, {
@@ -829,7 +937,7 @@ function HandCard({
       tension: 95,
       useNativeDriver: true,
     }).start();
-  }, [card.id, entryAnim]);
+  }, [card.id, entryAnim, motionLevel]);
 
   const panResponder = useMemo(
     () =>
@@ -841,16 +949,18 @@ function HandCard({
           Math.abs(gesture.dy) > Math.abs(gesture.dx) * 0.45,
         onPanResponderGrant: () => {
           onDragStart();
-          Haptics.selectionAsync().catch(() => {});
+          if (hapticsEnabled) Haptics.selectionAsync().catch(() => {});
         },
         onPanResponderMove: Animated.event([null, { dx: pan.x, dy: pan.y }], {
           useNativeDriver: false,
         }),
         onPanResponderRelease: (_, gesture) => {
           if (playable && gesture.dy < -64) {
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(
-              () => {}
-            );
+            if (hapticsEnabled) {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(
+                () => {}
+              );
+            }
 
             Animated.timing(pan, {
               toValue: {
@@ -884,7 +994,7 @@ function HandCard({
           }).start(onDragEnd);
         },
       }),
-    [card, onDragEnd, onDragStart, onPress, pan, playable]
+    [card, hapticsEnabled, onDragEnd, onDragStart, onPress, pan, playable]
   );
 
   return (
@@ -897,7 +1007,7 @@ function HandCard({
         {
           width: layout.cardWidth,
           height: layout.cardHeight,
-          marginLeft: index === 0 ? 0 : -layout.overlap,
+          marginLeft: index === 0 ? 0 : layout.cardStep - layout.cardWidth,
           zIndex: isDragging ? 300 : playable ? 100 + index : index,
           opacity: entryAnim,
           transform: [
@@ -908,7 +1018,7 @@ function HandCard({
               }),
             },
             { translateX: pan.x },
-            { translateY: playable ? -13 : restingLift },
+            { translateY: playable ? -10 : 0 },
             { translateY: pan.y },
             { rotate: `${fanAngle}deg` },
             { scale: playable ? 1.04 : 1 },
@@ -919,7 +1029,7 @@ function HandCard({
       <Pressable hitSlop={8} onPress={() => onPress(card)}>
         {playable ? (
           <View style={styles.playablePip}>
-            <Text style={styles.playablePipText}>✓</Text>
+            <Text style={styles.playablePipText}>OK</Text>
           </View>
         ) : null}
 

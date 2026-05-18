@@ -320,7 +320,10 @@ export function canPlayCard(room: GameRoom, card: Card, playerId?: string) {
   const activeSuit = getActiveSuit(room);
 
   if (card.value === "J") {
-    return Boolean(card.suit && activeSuit && card.suit === activeSuit);
+    return (
+      topCard.value === "J" ||
+      Boolean(card.suit && activeSuit && card.suit === activeSuit)
+    );
   }
 
   return card.value === topCard.value || card.suit === activeSuit;
@@ -330,6 +333,50 @@ function hasPlayableCard(room: GameRoom, playerId: string) {
   const hand = room.hands[playerId] ?? [];
 
   return hand.some((card) => canPlayCard(room, card, playerId));
+}
+
+function finishRoundIfHandEmpty(room: GameRoom, playerId: string) {
+  if ((room.hands[playerId]?.length ?? 0) > 0) return false;
+
+  room.winnerId = playerId;
+  room.turnState = "finished";
+
+  return true;
+}
+
+function penalizePestCardFinish(
+  room: GameRoom,
+  playerId: string,
+  steps: number
+) {
+  drawAmountToPlayer(room, playerId, 2);
+  room.pendingDraw = 0;
+  room.chosenSuit = undefined;
+  clearSevenChain(room);
+
+  room.lastMessage = `${getPlayerName(
+    room,
+    playerId
+  )} probeerde te eindigen met een pestkaart en pakt 2 strafkaarten.`;
+
+  moveSteps(room, steps);
+}
+
+function clearSevenChain(room: GameRoom) {
+  room.turnState = "normal";
+  room.sevenSuit = undefined;
+  room.sevenStopAfterNext = false;
+}
+
+function penalizeFailedSevenContinuation(
+  room: GameRoom,
+  playerId: string,
+  message: string
+) {
+  drawAmountToPlayer(room, playerId, 1);
+  room.lastMessage = message;
+  clearSevenChain(room);
+  moveToNextPlayer(room);
 }
 
 export function playCard(
@@ -385,25 +432,8 @@ export function playCard(
 
   const effect = applyCardEffect(room, card, chosenSuit);
 
-  if (hand.length === 0) {
-    if (isPestCard(card) && !wasSevenChain) {
-      drawAmountToPlayer(room, playerId, 2);
-      room.pendingDraw = 0;
-
-      room.lastMessage = `${getPlayerName(
-        room,
-        playerId
-      )} probeerde te eindigen met een pestkaart en pakt 2 strafkaarten.`;
-
-      room.turnState = "normal";
-      room.sevenSuit = undefined;
-      room.sevenStopAfterNext = false;
-      moveSteps(room, effect.steps);
-      return;
-    }
-
-    room.winnerId = playerId;
-    room.turnState = "finished";
+  if (hand.length === 0 && isPestCard(card)) {
+    penalizePestCardFinish(room, playerId, effect.steps);
     return;
   }
 
@@ -416,6 +446,8 @@ export function playCard(
       room,
       playerId
     )} sluit de 7-reeks af met dezelfde waarde.`;
+
+    if (finishRoundIfHandEmpty(room, playerId)) return;
 
     moveSteps(room, effect.steps);
     return;
@@ -439,6 +471,12 @@ export function playCard(
 
   if (card.value === "K") {
     resolveMustPlayAfterKing(room, playerId);
+    return;
+  }
+
+  if (hand.length === 0) {
+    room.winnerId = playerId;
+    room.turnState = "finished";
     return;
   }
 
@@ -500,17 +538,14 @@ function resolveSevenStart(room: GameRoom, playerId: string, card: Card) {
     !hasCardOfSuit(room, playerId, card.suit) &&
     !hasCardOfValue(room, playerId, "7")
   ) {
-    drawAmountToPlayer(room, playerId, 1);
-
-    room.lastMessage = `${getPlayerName(
+    penalizeFailedSevenContinuation(
       room,
-      playerId
-    )} legde een 7 maar kon geen kaart erbij leggen en pakt 1 strafkaart.`;
-
-    room.turnState = "normal";
-    room.sevenSuit = undefined;
-    room.sevenStopAfterNext = false;
-    moveToNextPlayer(room);
+      playerId,
+      `${getPlayerName(
+        room,
+        playerId
+      )} legde een 7 maar kon geen kaart erbij leggen en pakt 1 strafkaart.`
+    );
     return;
   }
 
@@ -533,32 +568,30 @@ function resolveSevenChainAfterCard(
   const suit = room.sevenSuit;
 
   if (wasSevenStopAfterNext) {
-    room.turnState = "normal";
-    room.sevenSuit = undefined;
-    room.sevenStopAfterNext = false;
+    clearSevenChain(room);
+
+    if (finishRoundIfHandEmpty(room, playerId)) return;
+
     moveSteps(room, steps);
     return;
   }
 
   if (card.value === "K") {
     if (!hasPlayableCard(room, playerId)) {
-      drawAmountToPlayer(room, playerId, 1);
-
-      room.lastMessage = `${getPlayerName(
+      penalizeFailedSevenContinuation(
         room,
-        playerId
-      )} eindigde de 7-reeks met een Heer maar kon niet nog een kaart leggen en pakt 1 strafkaart.`;
-
-      room.turnState = "normal";
-      room.sevenSuit = undefined;
-      room.sevenStopAfterNext = false;
-      moveToNextPlayer(room);
+        playerId,
+        `${getPlayerName(
+          room,
+          playerId
+        )} eindigde de 7-reeks met een Heer maar kon niet nog een kaart leggen en pakt 1 strafkaart.`
+      );
       return;
     }
 
     room.turnState = "seven_chain";
     room.sevenStopAfterNext = true;
-    room.lastMessage = "Heer in 7-reeks: leg nog precies één kaart.";
+    room.lastMessage = "Heer in 7-reeks: leg nog precies een kaart.";
     return;
   }
 
@@ -567,17 +600,14 @@ function resolveSevenChainAfterCard(
     const canContinueWithSeven = hasCardOfValue(room, playerId, "7");
 
     if (!canContinueWithSuit && !canContinueWithSeven) {
-      drawAmountToPlayer(room, playerId, 1);
-
-      room.lastMessage = `${getPlayerName(
+      penalizeFailedSevenContinuation(
         room,
-        playerId
-      )} legde een 7 maar kon niet verder en pakt 1 strafkaart.`;
-
-      room.turnState = "normal";
-      room.sevenSuit = undefined;
-      room.sevenStopAfterNext = false;
-      moveToNextPlayer(room);
+        playerId,
+        `${getPlayerName(
+          room,
+          playerId
+        )} legde een 7 maar kon niet verder en pakt 1 strafkaart.`
+      );
       return;
     }
 
@@ -592,9 +622,10 @@ function resolveSevenChainAfterCard(
   }
 
   if (isPestCard(card)) {
-    room.turnState = "normal";
-    room.sevenSuit = undefined;
-    room.sevenStopAfterNext = false;
+    clearSevenChain(room);
+
+    if (finishRoundIfHandEmpty(room, playerId)) return;
+
     moveSteps(room, steps);
     return;
   }
@@ -618,10 +649,15 @@ function resolveSevenChainAfterCard(
     return;
   }
 
-  room.turnState = "normal";
-  room.sevenSuit = undefined;
-  room.sevenStopAfterNext = false;
-  moveToNextPlayer(room);
+  clearSevenChain(room);
+
+  if (finishRoundIfHandEmpty(room, playerId)) return;
+
+  room.lastMessage = `${getPlayerName(
+    room,
+    playerId
+  )} sluit de 7-reeks af.`;
+  moveSteps(room, steps);
 }
 
 function resolveMustPlayAfterKing(room: GameRoom, playerId: string) {

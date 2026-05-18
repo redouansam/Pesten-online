@@ -98,6 +98,38 @@ describe("game rules", () => {
     assert.match(room.lastMessage ?? "", /pestkaart/);
   });
 
+  it("penalizes every pest card finish with two cards", () => {
+    const pestFinalCards: Array<{
+      card: Card;
+      chosenSuit?: Suit;
+    }> = [
+      { card: makeCard("final-a", "A", "hearts") },
+      { card: makeCard("final-2", "2", "hearts") },
+      { card: makeCard("final-7", "7", "hearts") },
+      { card: makeCard("final-8", "8", "hearts") },
+      { card: makeCard("final-j", "J", "hearts"), chosenSuit: "spades" },
+      { card: makeCard("final-k", "K", "hearts") },
+      { card: makeCard("final-joker", "JOKER") },
+    ];
+
+    for (const { card, chosenSuit } of pestFinalCards) {
+      const room = makeRoom(2);
+
+      room.discardPile = [makeCard("top", "5", "hearts")];
+      room.hands["1"] = [card];
+      room.deck = [
+        makeCard(`${card.id}-penalty-1`, "4", "clubs"),
+        makeCard(`${card.id}-penalty-2`, "6", "spades"),
+      ];
+
+      playCard(room, "1", card.id, chosenSuit);
+
+      assert.equal(room.winnerId, undefined, `${card.value} should not win`);
+      assert.equal(room.hands["1"].length, 2, `${card.value} penalty`);
+      assert.match(room.lastMessage ?? "", /2 strafkaarten/);
+    }
+  });
+
   it("keeps a 7-chain on the same suit and allows same-value closure", () => {
     const room = makeRoom(2);
 
@@ -125,6 +157,96 @@ describe("game rules", () => {
 
     assert.equal(room.turnState, "normal");
     assert.equal(room.sevenSuit, undefined);
+    assert.equal(getCurrentPlayer(room)?.id, "2");
+  });
+
+  it("runs the full 7 same-suit chain and closes on same value", () => {
+    const room = makeRoom(2);
+
+    room.discardPile = [makeCard("top", "Q", "hearts")];
+    room.hands["1"] = [
+      makeCard("heart-7", "7", "hearts"),
+      makeCard("heart-4", "4", "hearts"),
+      makeCard("heart-6", "6", "hearts"),
+      makeCard("spade-6", "6", "spades"),
+      makeCard("extra", "9", "clubs"),
+    ];
+
+    playCard(room, "1", "heart-7");
+    playCard(room, "1", "heart-4");
+    playCard(room, "1", "heart-6");
+
+    const spadeSix = room.hands["1"].find((card) => card.id === "spade-6");
+
+    assert.equal(canPlayCard(room, spadeSix!, "1"), true);
+
+    playCard(room, "1", "spade-6");
+
+    assert.equal(room.turnState, "normal");
+    assert.equal(room.sevenSuit, undefined);
+    assert.equal(getCurrentPlayer(room)?.id, "2");
+  });
+
+  it("ends a 7-chain cleanly after one valid follow-up card", () => {
+    const room = makeRoom(2);
+
+    room.discardPile = [makeCard("top", "Q", "hearts")];
+    room.hands["1"] = [
+      makeCard("heart-7", "7", "hearts"),
+      makeCard("heart-6", "6", "hearts"),
+      makeCard("spade-9", "9", "spades"),
+    ];
+    room.deck = [makeCard("penalty", "10", "clubs")];
+
+    playCard(room, "1", "heart-7");
+    playCard(room, "1", "heart-6");
+
+    assert.equal(room.turnState, "normal");
+    assert.equal(room.sevenSuit, undefined);
+    assert.equal(room.hands["1"].some((card) => card.id === "penalty"), false);
+    assert.equal(getCurrentPlayer(room)?.id, "2");
+    assert.match(room.lastMessage ?? "", /sluit de 7-reeks af/);
+  });
+
+  it("penalizes a bare 7 when the player cannot add a required card", () => {
+    const room = makeRoom(2);
+
+    room.discardPile = [makeCard("top", "Q", "hearts")];
+    room.hands["1"] = [
+      makeCard("heart-7", "7", "hearts"),
+      makeCard("spade-9", "9", "spades"),
+    ];
+    room.deck = [makeCard("penalty", "10", "clubs")];
+
+    playCard(room, "1", "heart-7");
+
+    assert.equal(room.turnState, "normal");
+    assert.equal(room.sevenSuit, undefined);
+    assert.equal(room.hands["1"].some((card) => card.id === "penalty"), true);
+    assert.equal(getCurrentPlayer(room)?.id, "2");
+    assert.match(room.lastMessage ?? "", /geen kaart erbij leggen/);
+  });
+
+  it("lets a 7-chain switch suits and close on a draw card when cards remain", () => {
+    const room = makeRoom(2);
+
+    room.discardPile = [makeCard("top", "Q", "spades")];
+    room.hands["1"] = [
+      makeCard("spade-7", "7", "spades"),
+      makeCard("diamond-7", "7", "diamonds"),
+      makeCard("diamond-6", "6", "diamonds"),
+      makeCard("diamond-2", "2", "diamonds"),
+      makeCard("extra", "9", "clubs"),
+    ];
+
+    playCard(room, "1", "spade-7");
+    playCard(room, "1", "diamond-7");
+    playCard(room, "1", "diamond-6");
+    playCard(room, "1", "diamond-2");
+
+    assert.equal(room.turnState, "normal");
+    assert.equal(room.sevenSuit, undefined);
+    assert.equal(room.pendingDraw, 2);
     assert.equal(getCurrentPlayer(room)?.id, "2");
   });
 
@@ -175,6 +297,24 @@ describe("game rules", () => {
 
     assert.equal(room.turnState, "normal");
     assert.equal(room.sevenSuit, undefined);
+    assert.equal(getCurrentPlayer(room)?.id, "2");
+  });
+
+  it("allows a jack on top of another jack", () => {
+    const room = makeRoom(2);
+
+    room.discardPile = [makeCard("top-jack", "J", "hearts")];
+    room.chosenSuit = "diamonds";
+    room.hands["1"] = [
+      makeCard("club-jack", "J", "clubs"),
+      makeCard("club-9", "9", "clubs"),
+    ];
+
+    assert.equal(canPlayCard(room, room.hands["1"][0], "1"), true);
+
+    playCard(room, "1", "club-jack", "spades");
+
+    assert.equal(room.chosenSuit, "spades");
     assert.equal(getCurrentPlayer(room)?.id, "2");
   });
 

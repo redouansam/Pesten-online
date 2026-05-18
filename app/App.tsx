@@ -1,6 +1,6 @@
 import { LinearGradient } from "expo-linear-gradient";
 import { useEffect, useRef } from "react";
-import { Animated, SafeAreaView } from "react-native";
+import { Animated, Keyboard, SafeAreaView } from "react-native";
 
 import { getCardBackImage } from "./src/cardBackImages";
 import { GameTable } from "./src/components/GameTable";
@@ -9,11 +9,15 @@ import { WaitingRoom } from "./src/components/WaitingRoom";
 import { MATCH_ENTRY_COINS, REDRAW_COST_GEMS } from "./src/economy";
 import { useEconomy } from "./src/hooks/useEconomy";
 import { useRoomSocket } from "./src/hooks/useRoomSocket";
+import { useAppSettings } from "./src/settings";
 import { styles } from "./src/styles";
+import { getTableSkinOption } from "./src/tableSkins";
 
 export default function App() {
+  const { settings, updateSettings } = useAppSettings();
   const {
     connected,
+    connectionState,
     playerId,
     name,
     hasSavedName,
@@ -24,6 +28,7 @@ export default function App() {
     pendingAction,
     errorMessage,
     clearError,
+    retryConnection,
     createRoom,
     joinRoom,
     toggleReady,
@@ -34,7 +39,7 @@ export default function App() {
     passTurn,
     redrawDrawnCard,
     playAgain,
-  } = useRoomSocket();
+  } = useRoomSocket(settings.hapticsEnabled);
   const {
     wallet,
     season,
@@ -51,8 +56,11 @@ export default function App() {
     previewGemPurchase,
     buyCardBack,
     selectCardBack,
+    buyTableSkin,
+    selectTableSkin,
     recordGameResult,
     claimSeasonReward,
+    claimMilestoneReward,
   } = useEconomy();
 
   const isHost = room?.hostId === playerId;
@@ -62,16 +70,17 @@ export default function App() {
   const screenAnim = useRef(new Animated.Value(1)).current;
   const pendingEntrySpendRef = useRef(false);
   const pendingRedrawSpendRef = useRef(false);
+  const selectedTableSkin = getTableSkinOption(wallet.selectedTableSkinId);
 
   useEffect(() => {
     screenAnim.setValue(0);
 
     Animated.timing(screenAnim, {
       toValue: 1,
-      duration: 240,
+      duration: settings.motionLevel === "low" ? 120 : 240,
       useNativeDriver: true,
     }).start();
-  }, [screenAnim, screenKey]);
+  }, [screenAnim, screenKey, settings.motionLevel]);
 
   useEffect(() => {
     if (!room || !pendingEntrySpendRef.current) return;
@@ -114,6 +123,8 @@ export default function App() {
   ]);
 
   function createRoomWithEntry() {
+    Keyboard.dismiss();
+
     if (!connected) {
       createRoom();
       return;
@@ -126,6 +137,8 @@ export default function App() {
   }
 
   function joinRoomWithEntry() {
+    Keyboard.dismiss();
+
     if (!connected || roomCodeInput.trim().length < 5) {
       joinRoom();
       return;
@@ -185,11 +198,15 @@ export default function App() {
               createRoom={createRoomWithEntry}
               joinRoom={joinRoomWithEntry}
               connected={connected}
+              connectionState={connectionState}
               pendingAction={pendingAction}
               errorMessage={errorMessage}
               clearError={clearError}
+              retryConnection={retryConnection}
               wallet={wallet}
               season={season}
+              settings={settings}
+              updateSettings={updateSettings}
               economyNotice={economyNotice}
               clearEconomyNotice={clearNotice}
               entryCostCoins={MATCH_ENTRY_COINS}
@@ -200,7 +217,10 @@ export default function App() {
               previewGemPurchase={previewGemPurchase}
               buyCardBack={buyCardBack}
               selectCardBack={selectCardBack}
+              buyTableSkin={buyTableSkin}
+              selectTableSkin={selectTableSkin}
               claimSeasonReward={claimSeasonReward}
+              claimMilestoneReward={claimMilestoneReward}
             />
           ) : room.started ? (
             <GameTable
@@ -213,8 +233,16 @@ export default function App() {
               playCard={playCard}
               playAgain={playAgain}
               leaveRoom={leaveRoom}
+              connectionState={connectionState}
+              errorMessage={errorMessage}
+              clearError={clearError}
+              retryConnection={retryConnection}
               gems={wallet.gems}
               cardBackImage={getCardBackImage(wallet.selectedCardBackId)}
+              tableSkin={selectedTableSkin}
+              hapticsEnabled={settings.hapticsEnabled}
+              cardSize={settings.cardSize}
+              motionLevel={settings.motionLevel}
               redrawDrawnCard={redrawDrawnCardWithGems}
             />
           ) : (
@@ -225,9 +253,12 @@ export default function App() {
               startGame={startGame}
               toggleReady={toggleReady}
               leaveRoom={leaveRoom}
+              connectionState={connectionState}
+              retryConnection={retryConnection}
               pendingAction={pendingAction}
               errorMessage={errorMessage}
               clearError={clearError}
+              hapticsEnabled={settings.hapticsEnabled}
             />
           )}
         </Animated.View>
