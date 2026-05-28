@@ -22,9 +22,20 @@ export const defaultAppSettings: AppSettings = {
 const settingsStorageKey = "pesten.settings.v1";
 
 function normalizeSettings(value: Partial<AppSettings> | null): AppSettings {
+  const cardSize: CardSizeSetting =
+    value?.cardSize === "compact" || value?.cardSize === "large"
+      ? value.cardSize
+      : "normal";
+  const motionLevel: MotionSetting =
+    value?.motionLevel === "low" ? "low" : "normal";
+  const language: LanguageSetting = "nl";
+
   return {
     ...defaultAppSettings,
     ...value,
+    cardSize,
+    motionLevel,
+    language,
   };
 }
 

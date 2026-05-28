@@ -5,9 +5,13 @@ import {
   createRoom,
   drawCards,
   getCurrentPlayer,
+  getPublicRoomState,
+  passTurn,
   playCard,
   redrawDrawnCard,
+  resetToLobby,
   sortHand,
+  startGame,
 } from "./game";
 import { Card, GameRoom, Player, Suit } from "./types";
 
@@ -40,6 +44,8 @@ function makeRoom(playerCount = 3): GameRoom {
   room.deck = [];
   room.discardPile = [makeCard("top", "5", "hearts")];
   room.hands = Object.fromEntries(players.map((player) => [player.id, []]));
+  room.roundPlayerIds = players.map((player) => player.id);
+  room.finishedPlayerIds = [];
   room.currentPlayerIndex = 0;
 
   return room;
@@ -77,6 +83,58 @@ describe("game rules", () => {
     assert.equal(room.pendingDraw, 0);
     assert.equal(room.hands["3"].length, 7);
     assert.equal(room.turnState, "after_draw");
+  });
+
+  it("only allows 2 or Joker to stack a draw penalty", () => {
+    const room = makeRoom(2);
+
+    room.discardPile = [makeCard("top-2", "2", "hearts")];
+    room.pendingDraw = 2;
+    room.hands["1"] = [
+      makeCard("same-suit", "9", "hearts"),
+      makeCard("same-value", "2", "clubs"),
+      makeCard("joker", "JOKER"),
+    ];
+
+    assert.equal(canPlayCard(room, room.hands["1"][0], "1"), false);
+    assert.equal(canPlayCard(room, room.hands["1"][1], "1"), true);
+    assert.equal(canPlayCard(room, room.hands["1"][2], "1"), true);
+  });
+
+  it("allows drawing even when the player has a playable card", () => {
+    const room = makeRoom(2);
+
+    room.discardPile = [makeCard("top", "5", "hearts")];
+    room.hands["1"] = [
+      makeCard("playable", "5", "clubs"),
+      makeCard("other", "9", "spades"),
+    ];
+    room.deck = [makeCard("drawn", "10", "diamonds")];
+
+    const publicRoom = getPublicRoomState(room, "1");
+
+    assert.equal(publicRoom.canDraw, true);
+
+    drawCards(room, "1");
+
+    assert.equal(room.hands["1"].some((card) => card.id === "drawn"), true);
+    assert.equal(room.turnState, "after_draw");
+  });
+
+  it("reshuffles the discard pile into the deck when drawing from an empty deck", () => {
+    const room = makeRoom(2);
+
+    room.discardPile = [
+      makeCard("recycled", "9", "spades"),
+      makeCard("top", "5", "hearts"),
+    ];
+    room.hands["1"] = [makeCard("hand", "10", "clubs")];
+    room.deck = [];
+
+    drawCards(room, "1");
+
+    assert.equal(room.hands["1"].some((card) => card.id === "recycled"), true);
+    assert.deepEqual(room.discardPile.map((card) => card.id), ["top"]);
   });
 
   it("penalizes illegal pest-card finishes without forwarding the draw stack", () => {
@@ -316,6 +374,296 @@ describe("game rules", () => {
 
     assert.equal(room.chosenSuit, "spades");
     assert.equal(getCurrentPlayer(room)?.id, "2");
+  });
+
+  it("reverses direction after an ace", () => {
+    const room = makeRoom(3);
+
+    room.discardPile = [makeCard("top", "5", "hearts")];
+    room.hands["1"] = [
+      makeCard("ace", "A", "hearts"),
+      makeCard("extra", "9", "clubs"),
+    ];
+
+    playCard(room, "1", "ace");
+
+    assert.equal(room.direction, -1);
+    assert.equal(getCurrentPlayer(room)?.id, "3");
+  });
+
+  it("skips the next player after an eight", () => {
+    const room = makeRoom(3);
+
+    room.discardPile = [makeCard("top", "5", "hearts")];
+    room.hands["1"] = [
+      makeCard("eight", "8", "hearts"),
+      makeCard("extra", "9", "clubs"),
+    ];
+
+    playCard(room, "1", "eight");
+
+    assert.equal(getCurrentPlayer(room)?.id, "3");
+  });
+
+  it("respects the chosen suit after a jack", () => {
+    const room = makeRoom(2);
+
+    room.discardPile = [makeCard("top-jack", "J", "hearts")];
+    room.chosenSuit = "spades";
+    room.hands["1"] = [
+      makeCard("heart-9", "9", "hearts"),
+      makeCard("spade-4", "4", "spades"),
+      makeCard("club-jack", "J", "clubs"),
+    ];
+
+    assert.equal(canPlayCard(room, room.hands["1"][0], "1"), false);
+    assert.equal(canPlayCard(room, room.hands["1"][1], "1"), true);
+    assert.equal(canPlayCard(room, room.hands["1"][2], "1"), true);
+
+    playCard(room, "1", "spade-4");
+
+    assert.equal(room.chosenSuit, undefined);
+    assert.equal(getCurrentPlayer(room)?.id, "2");
+  });
+
+  it("rejects invalid plays without changing turn state", () => {
+    const room = makeRoom(2);
+
+    room.discardPile = [makeCard("top", "5", "hearts")];
+    room.hands["1"] = [
+      makeCard("bad-card", "9", "clubs"),
+      makeCard("good-card", "5", "spades"),
+    ];
+
+    assert.throws(() => playCard(room, "1", "bad-card"), /mag je nu niet/);
+    assert.deepEqual(
+      room.hands["1"].map((card) => card.id),
+      ["bad-card", "good-card"]
+    );
+    assert.equal(getCurrentPlayer(room)?.id, "1");
+    assert.equal(room.turnState, "normal");
+  });
+
+  it("forces a draw before passing when a king in a 7-chain has no follow-up", () => {
+    const room = makeRoom(2);
+
+    room.discardPile = [makeCard("top", "Q", "hearts")];
+    room.hands["1"] = [
+      makeCard("heart-7", "7", "hearts"),
+      makeCard("heart-k", "K", "hearts"),
+      makeCard("club-9", "9", "clubs"),
+    ];
+    room.deck = [makeCard("draw-card", "4", "spades")];
+
+    playCard(room, "1", "heart-7");
+    playCard(room, "1", "heart-k");
+
+    const publicRoom = getPublicRoomState(room, "1");
+
+    assert.equal(room.turnState, "seven_chain");
+    assert.equal(room.sevenStopAfterNext, true);
+    assert.equal(publicRoom.canDraw, true);
+    assert.equal(publicRoom.canPass, false);
+    assert.throws(() => passTurn(room, "1"), /nadat je hebt gepakt/);
+
+    drawCards(room, "1");
+
+    const afterDrawRoom = getPublicRoomState(room, "1");
+
+    assert.equal(room.turnState, "after_draw");
+    assert.equal(afterDrawRoom.canPass, true);
+    passTurn(room, "1");
+
+    assert.equal(room.turnState, "normal");
+    assert.equal(room.sevenSuit, undefined);
+    assert.equal(getCurrentPlayer(room)?.id, "2");
+  });
+
+  it("allows a normal follow-up card after a king in a 7-chain", () => {
+    const room = makeRoom(2);
+
+    room.discardPile = [makeCard("top", "Q", "hearts")];
+    room.hands["1"] = [
+      makeCard("heart-7", "7", "hearts"),
+      makeCard("heart-k", "K", "hearts"),
+      makeCard("joker", "JOKER"),
+      makeCard("club-9", "9", "clubs"),
+    ];
+
+    playCard(room, "1", "heart-7");
+    playCard(room, "1", "heart-k");
+
+    const joker = room.hands["1"].find((card) => card.id === "joker");
+    const publicRoom = getPublicRoomState(room, "1");
+
+    assert.equal(canPlayCard(room, joker!, "1"), true);
+    assert.equal(publicRoom.canDraw, false);
+    assert.equal(publicRoom.canPass, false);
+
+    playCard(room, "1", "joker");
+
+    assert.equal(room.turnState, "normal");
+    assert.equal(getCurrentPlayer(room)?.id, "2");
+  });
+
+  it("forces a draw before passing when a normal king has no follow-up", () => {
+    const room = makeRoom(2);
+
+    room.discardPile = [makeCard("top", "5", "hearts")];
+    room.hands["1"] = [
+      makeCard("heart-k", "K", "hearts"),
+      makeCard("club-9", "9", "clubs"),
+    ];
+    room.deck = [makeCard("draw-card", "4", "spades")];
+
+    playCard(room, "1", "heart-k");
+
+    const publicRoom = getPublicRoomState(room, "1");
+
+    assert.equal(room.turnState, "must_play");
+    assert.equal(publicRoom.canDraw, true);
+    assert.equal(publicRoom.canPass, false);
+    assert.throws(() => passTurn(room, "1"), /nadat je hebt gepakt/);
+
+    drawCards(room, "1");
+
+    const afterDrawRoom = getPublicRoomState(room, "1");
+
+    assert.equal(room.turnState, "after_draw");
+    assert.equal(afterDrawRoom.canPass, true);
+    passTurn(room, "1");
+
+    assert.equal(room.turnState, "normal");
+    assert.equal(getCurrentPlayer(room)?.id, "2");
+  });
+
+  it("ends a normal king turn after exactly one follow-up king", () => {
+    const room = makeRoom(2);
+
+    room.discardPile = [makeCard("top", "5", "hearts")];
+    room.hands["1"] = [
+      makeCard("heart-k", "K", "hearts"),
+      makeCard("spade-k", "K", "spades"),
+      makeCard("extra", "9", "clubs"),
+    ];
+
+    playCard(room, "1", "heart-k");
+
+    assert.equal(room.turnState, "must_play");
+    assert.equal(getCurrentPlayer(room)?.id, "1");
+
+    playCard(room, "1", "spade-k");
+
+    assert.equal(room.turnState, "normal");
+    assert.equal(getCurrentPlayer(room)?.id, "2");
+  });
+
+  it("continues after the first winner until one loser remains", () => {
+    const room = makeRoom(3);
+
+    room.discardPile = [makeCard("top", "5", "hearts")];
+    room.hands["1"] = [makeCard("p1-out", "5", "clubs")];
+    room.hands["2"] = [makeCard("p2-out", "5", "diamonds")];
+    room.hands["3"] = [makeCard("p3-left", "9", "spades")];
+
+    playCard(room, "1", "p1-out");
+
+    assert.equal(room.winnerId, "1");
+    assert.equal(room.turnState, "normal");
+    assert.equal(room.loserId, undefined);
+    assert.deepEqual(room.finishedPlayerIds, ["1"]);
+    assert.equal(getCurrentPlayer(room)?.id, "2");
+
+    playCard(room, "2", "p2-out");
+
+    assert.equal(room.winnerId, "1");
+    assert.equal(room.loserId, "3");
+    assert.equal(room.turnState, "finished");
+    assert.deepEqual(room.finishedPlayerIds, ["1", "2"]);
+  });
+
+  it("keeps late joiners waiting until the next round and skips them in turn order", () => {
+    const room = makeRoom(2);
+    const latePlayer = makePlayer("3");
+
+    room.players.push(latePlayer);
+    room.discardPile = [makeCard("top", "5", "hearts")];
+    room.hands["1"] = [makeCard("p1-play", "5", "clubs"), makeCard("p1-extra", "9", "spades")];
+    room.hands["2"] = [makeCard("p2-play", "5", "diamonds")];
+
+    playCard(room, "1", "p1-play");
+
+    const latePublicRoom = getPublicRoomState(room, "3");
+    const latePublicPlayer = latePublicRoom.players.find((player) => player.id === "3");
+
+    assert.equal(getCurrentPlayer(room)?.id, "2");
+    assert.equal(latePublicPlayer?.waitingForNextRound, true);
+    assert.equal(latePublicPlayer?.inRound, false);
+    assert.equal(latePublicRoom.canDraw, false);
+  });
+
+  it("resets finished rounds back to a clean lobby", () => {
+    const room = makeRoom(2);
+
+    room.turnState = "finished";
+    room.winnerId = "1";
+    room.loserId = "2";
+    room.pendingDraw = 7;
+    room.chosenSuit = "spades";
+    room.sevenSuit = "hearts";
+    room.sevenStopAfterNext = true;
+    room.redrawOffer = {
+      playerId: "1",
+      cardId: "drawn",
+      attempts: 1,
+    };
+    room.rematchVotes = {
+      "1": true,
+      "2": true,
+    };
+    room.players[0].ready = true;
+    room.players[1].ready = true;
+
+    resetToLobby(room);
+
+    assert.equal(room.started, false);
+    assert.equal(room.turnState, "normal");
+    assert.equal(room.pendingDraw, 0);
+    assert.equal(room.chosenSuit, undefined);
+    assert.equal(room.sevenSuit, undefined);
+    assert.equal(room.sevenStopAfterNext, false);
+    assert.equal(room.redrawOffer, undefined);
+    assert.equal(room.winnerId, undefined);
+    assert.equal(room.loserId, undefined);
+    assert.deepEqual(room.rematchVotes, {});
+    assert.deepEqual(room.roundPlayerIds, []);
+    assert.deepEqual(room.finishedPlayerIds, []);
+    assert.equal(room.players.every((player) => !player.ready), true);
+  });
+
+  it("starts a rematch with clean votes and fresh hands", () => {
+    const room = makeRoom(2);
+
+    room.turnState = "finished";
+    room.winnerId = "1";
+    room.loserId = "2";
+    room.rematchVotes = {
+      "1": true,
+      "2": true,
+    };
+
+    startGame(room);
+
+    assert.equal(room.started, true);
+    assert.equal(room.turnState, "normal");
+    assert.equal(room.winnerId, undefined);
+    assert.equal(room.loserId, undefined);
+    assert.deepEqual(room.rematchVotes, {});
+    assert.equal(room.players.every((player) => !player.ready), true);
+    assert.equal(room.hands["1"].length, 7);
+    assert.equal(room.hands["2"].length, 7);
+    assert.equal(room.roundPlayerIds.length, 2);
+    assert.equal(room.discardPile.length, 1);
   });
 
   it("offers a gem redraw when a normal draw is not playable", () => {

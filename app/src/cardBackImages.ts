@@ -106,7 +106,7 @@ export const cardBackOptions: CardBackOption[] = [
   {
     id: "navy-gold-cubes",
     title: "Navy Cubes",
-    description: "Navy met gouden lijnen, duidelijk de sharpest suit.",
+    description: "Navy met gouden lijnen, strak en premium.",
     rarity: "Premium",
     image: require("../assets/card backs/navy-gold-cubes.jpg"),
     premium: true,

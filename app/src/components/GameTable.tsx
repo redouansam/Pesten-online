@@ -23,17 +23,22 @@ import {
   suitShortLabels,
 } from "../constants";
 import { getTurnText, isCardPlayable } from "../gameRules";
+import { GameButton, GameModalFrame } from "./GameChrome";
 import type { ConnectionState } from "../hooks/useRoomSocket";
 import type { CardSizeSetting, MotionSetting } from "../settings";
 import { styles } from "../styles";
 import type { TableSkinOption } from "../tableSkins";
+import type { AvatarFrameOption, AvatarOption } from "../cosmetics";
 import { Card, PublicPlayer, PublicRoomState, Suit } from "../types";
+
+type HandSortMode = "suit" | "value";
 
 export function GameTable({
   room,
   playerId,
   isYourTurn,
   winnerName,
+  loserName,
   drawCards,
   passTurn,
   playCard,
@@ -41,20 +46,25 @@ export function GameTable({
   leaveRoom,
   connectionState,
   errorMessage,
+  pendingAction,
   clearError,
   retryConnection,
   gems,
   cardBackImage,
   tableSkin,
+  avatar,
+  avatarFrame,
   hapticsEnabled,
   cardSize,
   motionLevel,
   redrawDrawnCard,
+  sortHand,
 }: {
   room: PublicRoomState;
   playerId: string;
   isYourTurn: boolean;
   winnerName?: string;
+  loserName?: string;
   drawCards: () => void;
   passTurn: () => void;
   playCard: (card: Card, chosenSuit?: Suit) => void;
@@ -62,21 +72,26 @@ export function GameTable({
   leaveRoom: () => void | Promise<void>;
   connectionState: ConnectionState;
   errorMessage: string | null;
+  pendingAction: string | null;
   clearError: () => void;
   retryConnection: () => void;
   gems: number;
   cardBackImage: ImageSourcePropType;
   tableSkin: TableSkinOption;
+  avatar: AvatarOption;
+  avatarFrame: AvatarFrameOption;
   hapticsEnabled: boolean;
   cardSize: CardSizeSetting;
   motionLevel: MotionSetting;
   redrawDrawnCard: () => void;
+  sortHand: (mode: HandSortMode) => void;
 }) {
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
 
   const [pendingJackCard, setPendingJackCard] = useState<Card | null>(null);
   const [draggingCardId, setDraggingCardId] = useState<string | null>(null);
   const [cardHint, setCardHint] = useState<string | null>(null);
+  const [handSortMode, setHandSortMode] = useState<HandSortMode>("suit");
 
   const handAnim = useRef(new Animated.Value(1)).current;
   const deckPulseAnim = useRef(new Animated.Value(0)).current;
@@ -86,6 +101,7 @@ export function GameTable({
   const previousHandCountRef = useRef(room.hand.length);
   const previousTopCardIdRef = useRef(room.topCard?.id);
   const autoPassNoGemsRef = useRef(false);
+  const roundFinished = room.turnState === "finished";
 
   useEffect(() => {
     if (isYourTurn && !wasYourTurnRef.current && !winnerName) {
@@ -167,7 +183,7 @@ export function GameTable({
     if (
       !isYourTurn ||
       !room.canRedrawDrawnCard ||
-      room.winnerId ||
+      roundFinished ||
       gems >= room.redrawCostGems
     ) {
       autoPassNoGemsRef.current = false;
@@ -190,44 +206,60 @@ export function GameTable({
     passTurn,
     room.canRedrawDrawnCard,
     room.redrawCostGems,
-    room.winnerId,
+    roundFinished,
   ]);
 
   const me = room.players.find((player) => player.id === playerId);
   const others = room.players.filter((player) => player.id !== playerId);
+  const isWaitingForNextRound = Boolean(me?.waitingForNextRound);
+  const finishedThisRound = Boolean(me?.finished);
   const sortedHand = useMemo(
-    () => [...room.hand].sort(compareCardsBySymbol),
-    [room.hand]
+    () =>
+      [...room.hand].sort(
+        handSortMode === "value" ? compareCardsByValue : compareCardsBySymbol
+      ),
+    [handSortMode, room.hand]
   );
 
   const currentPlayer = room.players.find(
     (player) => player.id === room.currentPlayerId
   );
+  const endRanking = useMemo(() => getEndRanking(room), [room]);
+  const compactControls = screenWidth < 390 || screenHeight < 720;
+  const rematchPending = pendingAction === "rematch";
 
   const handLayout = useMemo(() => {
     const maxGameWidth = Math.min(screenWidth, 560);
-    const handAreaWidth = Math.max(280, maxGameWidth - 58);
+    const handAreaWidth = Math.max(
+      compactControls ? 226 : 260,
+      maxGameWidth - (compactControls ? 72 : 84)
+    );
     const cardCount = Math.max(sortedHand.length, 1);
     const sizeScale =
       cardSize === "compact" ? 0.88 : cardSize === "large" ? 1.12 : 1;
     const baseCardWidth =
-      Math.min(102, Math.max(74, maxGameWidth * 0.2)) * sizeScale;
+      Math.min(
+        compactControls ? 92 : 102,
+        Math.max(compactControls ? 64 : 74, maxGameWidth * 0.2)
+      ) * sizeScale;
     const denseCardWidth =
-      cardCount > 17
-        ? 62
+      cardCount > 22
+        ? 54
+        : cardCount > 17
+        ? 58
         : cardCount > 13
-        ? 70
+        ? 66
         : cardCount > 10
-        ? 80
+        ? 76
         : baseCardWidth;
     const cardWidth = Math.min(baseCardWidth, denseCardWidth);
     const cardHeight = cardWidth * 1.42;
     const cardStep =
       cardCount > 1
         ? Math.max(
-            4,
+            3,
             Math.min(
-              cardWidth * 0.48,
+              cardWidth * (compactControls ? 0.36 : 0.42),
               (handAreaWidth - cardWidth) / (cardCount - 1)
             )
           )
@@ -239,10 +271,11 @@ export function GameTable({
       cardHeight,
       fanWidth,
       cardStep,
-      angleStep: cardCount > 1 ? Math.min(1.2, 8 / cardCount) : 0,
-      handHeight: cardHeight + 36,
+      angleStep:
+        cardCount > 1 ? Math.min(compactControls ? 0.55 : 0.85, 6 / cardCount) : 0,
+      handHeight: cardHeight + (compactControls ? 22 : 32),
     };
-  }, [cardSize, screenWidth, sortedHand.length]);
+  }, [cardSize, compactControls, screenWidth, sortedHand.length]);
 
   const opponentLayout =
     others.length <= 1
@@ -255,8 +288,9 @@ export function GameTable({
   const hideOpponentStacks = screenWidth < 460 && others.length >= 3;
 
   const playableCardsCount = room.hand.filter(
-    (card) => isYourTurn && !room.winnerId && isCardPlayable(room, card)
+    (card) => isYourTurn && !roundFinished && isCardPlayable(room, card)
   ).length;
+  const ruleBadges = useMemo(() => getRuleBadges(room), [room]);
   const turnCoachText = getTurnCoachText({
     room,
     isYourTurn,
@@ -291,7 +325,7 @@ export function GameTable({
   }
 
   function handleCardPress(card: Card) {
-    if (room.winnerId) return;
+    if (roundFinished) return;
 
     if (!isYourTurn) {
       showCardHint("Wacht tot jij aan de beurt bent.");
@@ -304,7 +338,7 @@ export function GameTable({
           () => {}
         );
       }
-      showCardHint("Deze kaart mag nu niet op de stapel.");
+      showCardHint(getInvalidCardHint(room));
       return;
     }
 
@@ -337,10 +371,32 @@ export function GameTable({
     setPendingJackCard(null);
   }
 
+  function chooseHandSortMode(mode: HandSortMode) {
+    if (mode === handSortMode) return;
+
+    setHandSortMode(mode);
+    sortHand(mode);
+  }
+
   return (
-    <View style={styles.gameContainer}>
-      <View style={styles.gameTopBar}>
-        <View style={styles.gameInfoPill}>
+    <View
+      style={[
+        styles.gameContainer,
+        compactControls && styles.gameContainerCompact,
+      ]}
+    >
+      <View
+        style={[
+          styles.gameTopBar,
+          compactControls && styles.gameTopBarCompact,
+        ]}
+      >
+        <View
+          style={[
+            styles.gameInfoPill,
+            compactControls && styles.gameInfoPillCompact,
+          ]}
+        >
           <Text style={styles.gameInfoLabel}>Kamer</Text>
           <Text style={styles.gameInfoValue}>{room.code}</Text>
         </View>
@@ -348,19 +404,28 @@ export function GameTable({
         <View
           style={[
             styles.turnBanner,
+            compactControls && styles.turnBannerCompact,
             isYourTurn && !winnerName ? styles.turnBannerActive : null,
           ]}
         >
           <Text style={styles.turnBannerText}>
             {winnerName
-              ? `${winnerName} wint`
+              ? "Ronde klaar"
+              : isWaitingForNextRound
+              ? "Je kijkt mee"
               : isYourTurn
               ? getTurnText(room)
               : `${currentPlayer?.name ?? "Speler"} is aan de beurt`}
           </Text>
         </View>
 
-        <Pressable style={styles.exitMiniButton} onPress={leaveRoom}>
+        <Pressable
+          style={[
+            styles.exitMiniButton,
+            compactControls && styles.exitMiniButtonCompact,
+          ]}
+          onPress={leaveRoom}
+        >
           <Text style={styles.exitMiniText}>Exit</Text>
         </Pressable>
       </View>
@@ -373,15 +438,20 @@ export function GameTable({
           <Text style={styles.gameConnectionText} numberOfLines={1}>
             {errorMessage ??
               (connectionState === "reconnecting"
-                ? "Opnieuw verbinden..."
+                ? "Server wordt wakker of verbinding herstelt..."
                 : connectionState === "connecting"
-                ? "Verbinden..."
+                ? "Verbinden... dit kan 30-60 sec duren"
                 : "Offline - tik om opnieuw te verbinden")}
           </Text>
         </Pressable>
       ) : null}
 
-      <View style={styles.tableWrapper}>
+      <View
+        style={[
+          styles.tableWrapper,
+          compactControls && styles.tableWrapperCompact,
+        ]}
+      >
         <LinearGradient
           colors={tableSkin.railColors}
           style={styles.woodTable}
@@ -573,26 +643,62 @@ export function GameTable({
         </LinearGradient>
       </View>
 
-      <View style={styles.bottomPanel}>
-        <View style={styles.playerControlRow}>
-          <View style={styles.meAvatar}>
-            <Text style={styles.meAvatarText}>
-              {(me?.name ?? "J").slice(0, 1).toUpperCase()}
+      <View
+        style={[
+          styles.bottomPanel,
+          compactControls && styles.bottomPanelCompact,
+        ]}
+      >
+        <View
+          style={[
+            styles.playerControlRow,
+            compactControls && styles.playerControlRowCompact,
+          ]}
+        >
+          <View
+            style={[
+              styles.meAvatar,
+              {
+                backgroundColor: avatar.backgroundColor,
+                borderColor: avatarFrame.borderColor,
+                shadowColor: avatarFrame.borderColor,
+              },
+            ]}
+          >
+            <Text
+              style={[
+                styles.meAvatarText,
+                {
+                  color: avatar.textColor,
+                },
+              ]}
+            >
+              {avatar.badge || (me?.name ?? "J").slice(0, 1).toUpperCase()}
             </Text>
           </View>
 
-          <View style={styles.meInfo}>
+          <View style={[styles.meInfo, compactControls && styles.meInfoCompact]}>
             <Text style={styles.meName}>{me?.name ?? "Jij"}</Text>
             <Text style={styles.meSub}>
-              {room.hand.length} kaarten - {isYourTurn ? "beurt" : "wacht"}
+              {isWaitingForNextRound
+                ? "wacht op volgende ronde"
+                : finishedThisRound
+                ? "je bent uit"
+                : `${room.hand.length} kaarten - ${isYourTurn ? "beurt" : "wacht"}`}
             </Text>
           </View>
 
-          <View style={styles.actionButtons}>
+          <View
+            style={[
+              styles.actionButtons,
+              compactControls && styles.actionButtonsCompact,
+            ]}
+          >
             {room.canRedrawDrawnCard ? (
               <Pressable
                 style={[
                   styles.redrawButton,
+                  compactControls && styles.redrawButtonCompact,
                   gems < room.redrawCostGems && styles.disabledButton,
                 ]}
                 onPress={handleRedrawDrawnCard}
@@ -607,6 +713,7 @@ export function GameTable({
             <Pressable
               style={[
                 styles.actionButton,
+                compactControls && styles.actionButtonCompact,
                 room.canDraw && isYourTurn && styles.actionButtonReady,
                 !room.canDraw && styles.disabledButton,
               ]}
@@ -621,6 +728,7 @@ export function GameTable({
             <Pressable
               style={[
                 styles.passButton,
+                compactControls && styles.passButtonCompact,
                 room.canPass && isYourTurn && styles.passButtonReady,
                 !room.canPass && styles.disabledButton,
               ]}
@@ -632,12 +740,50 @@ export function GameTable({
           </View>
         </View>
 
-        <View style={styles.handToolbar}>
+        <View
+          style={[
+            styles.handToolbar,
+            compactControls && styles.handToolbarCompact,
+          ]}
+        >
           <Text style={styles.handTitle}>Hand</Text>
 
           <View style={styles.handToolbarRight}>
-            <Text style={styles.handSortLabel}>Symbool</Text>
-            <Text style={styles.handMeta}>
+            <View style={styles.handSortSegment}>
+              <Pressable
+                style={[
+                  styles.handSortButton,
+                  handSortMode === "suit" && styles.handSortButtonActive,
+                ]}
+                onPress={() => chooseHandSortMode("suit")}
+              >
+                <Text
+                  style={[
+                    styles.handSortButtonText,
+                    handSortMode === "suit" && styles.handSortButtonTextActive,
+                  ]}
+                >
+                  Kleur
+                </Text>
+              </Pressable>
+              <Pressable
+                style={[
+                  styles.handSortButton,
+                  handSortMode === "value" && styles.handSortButtonActive,
+                ]}
+                onPress={() => chooseHandSortMode("value")}
+              >
+                <Text
+                  style={[
+                    styles.handSortButtonText,
+                    handSortMode === "value" && styles.handSortButtonTextActive,
+                  ]}
+                >
+                  Waarde
+                </Text>
+              </Pressable>
+            </View>
+            <Text style={styles.handMeta} numberOfLines={1}>
               {isYourTurn
                 ? `${playableCardsCount} speelbaar`
                 : "wacht"}
@@ -648,6 +794,7 @@ export function GameTable({
         <View
           style={[
             styles.turnCoach,
+            compactControls && styles.turnCoachCompact,
             isYourTurn && styles.turnCoachActive,
             cardHint && styles.turnCoachWarning,
           ]}
@@ -662,8 +809,49 @@ export function GameTable({
           </Text>
         </View>
 
-        <View style={styles.handArea}>
-          <View style={styles.handFanViewport}>
+        <View style={styles.ruleStatusRow}>
+          {ruleBadges.map((badge) => (
+            <View
+              key={badge.label}
+              style={[
+                styles.ruleStatusChip,
+                badge.tone === "danger" && styles.ruleStatusChipDanger,
+                badge.tone === "success" && styles.ruleStatusChipSuccess,
+                badge.tone === "warning" && styles.ruleStatusChipWarning,
+              ]}
+            >
+              <Text style={styles.ruleStatusLabel}>{badge.label}</Text>
+              <Text style={styles.ruleStatusValue} numberOfLines={1}>
+                {badge.value}
+              </Text>
+            </View>
+          ))}
+        </View>
+
+        <View
+          style={[
+            styles.handArea,
+            compactControls && styles.handAreaCompact,
+          ]}
+        >
+          {isWaitingForNextRound || finishedThisRound ? (
+            <View style={styles.waitingHandCard}>
+              <Text style={styles.waitingHandTitle}>
+                {isWaitingForNextRound ? "Je kijkt mee" : "Je bent uit"}
+              </Text>
+              <Text style={styles.waitingHandText}>
+                {isWaitingForNextRound
+                  ? "Je zit klaar en speelt automatisch mee in de volgende ronde."
+                  : "De rest speelt door tot er een verliezer overblijft."}
+              </Text>
+            </View>
+          ) : (
+          <View
+            style={[
+              styles.handFanViewport,
+              compactControls && styles.handFanViewportCompact,
+            ]}
+          >
             <Animated.View
               style={[
                 styles.handFan,
@@ -690,7 +878,7 @@ export function GameTable({
             >
               {sortedHand.map((card, index) => {
                 const playable =
-                  isYourTurn && !room.winnerId && isCardPlayable(room, card);
+                  isYourTurn && !roundFinished && isCardPlayable(room, card);
                 const centerIndex = (sortedHand.length - 1) / 2;
                 const distanceFromCenter = index - centerIndex;
                 const fanAngle = distanceFromCenter * handLayout.angleStep;
@@ -714,17 +902,17 @@ export function GameTable({
               })}
             </Animated.View>
           </View>
+          )}
         </View>
       </View>
 
       <Modal visible={Boolean(pendingJackCard)} transparent animationType="fade">
         <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Kies een symbool</Text>
-
-            <Text style={styles.modalText}>
-              Boer gespeeld.
-            </Text>
+          <GameModalFrame
+            eyebrow="Boer gespeeld"
+            title="Kies symbool"
+            text="Dit wordt de nieuwe kleur op tafel."
+          >
 
             <View style={styles.modalSuitGrid}>
               {suitOptions.map((suit) => (
@@ -749,49 +937,86 @@ export function GameTable({
               ))}
             </View>
 
-            <Pressable
-              style={styles.cancelButton}
+            <GameButton
+              label="Annuleren"
+              tone="secondary"
               onPress={() => setPendingJackCard(null)}
-            >
-              <Text style={styles.cancelButtonText}>Annuleren</Text>
-            </Pressable>
-          </View>
+            />
+          </GameModalFrame>
         </View>
       </Modal>
 
       <Modal visible={Boolean(winnerName)} transparent animationType="fade">
         <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <View style={styles.winnerHero}>
-              <Text style={styles.winnerHeroEyebrow}>Winnaar</Text>
-              <Text style={styles.winnerHeroTitle}>{winnerName}</Text>
-              <Text style={styles.winnerHeroText}>
-                Beloningen bijgewerkt.
-              </Text>
+          <GameModalFrame
+            eyebrow="Ronde klaar"
+            title={winnerName ? `${winnerName} wint` : "Ronde klaar"}
+            text={
+              loserName
+                ? `${loserName} bleef als laatste over.`
+                : "Beloningen bijgewerkt."
+            }
+          >
+            <View style={styles.rankingList}>
+              {endRanking.map((entry) => (
+                <View
+                  key={entry.player.id}
+                  style={[
+                    styles.rankingRow,
+                    entry.isLoser && styles.rankingRowLoser,
+                  ]}
+                >
+                  <Text style={styles.rankingPlace}>{entry.label}</Text>
+                  <Text style={styles.rankingName}>{entry.player.name}</Text>
+                  <Text style={styles.rankingMeta}>
+                    {entry.isLoser ? "verliezer" : `${entry.player.cardCount} kaarten`}
+                  </Text>
+                </View>
+              ))}
             </View>
 
-            <Text style={styles.modalText}>
-              Nog een potje?
-            </Text>
+            <View style={styles.rematchPanel}>
+              <Text style={styles.rematchTitle}>Nog een potje?</Text>
+              {room.players
+                .filter((player) => player.connected)
+                .map((player) => {
+                  const voted = Boolean(room.rematchVotes[player.id]);
 
-            <Pressable
-              style={styles.modalYesButton}
+                  return (
+                    <View key={player.id} style={styles.rematchVoteRow}>
+                      <Text style={styles.rematchVoteName}>{player.name}</Text>
+                      <Text
+                        style={[
+                          styles.rematchVoteState,
+                          voted && styles.rematchVoteStateReady,
+                        ]}
+                      >
+                        {voted ? "klaar" : "wacht"}
+                      </Text>
+                    </View>
+                  );
+                })}
+            </View>
+
+            <GameButton
+              label={rematchPending ? "Even wachten" : "Opnieuw"}
               onPress={() => playAgain(true)}
-            >
-              <Text style={styles.modalYesButtonText}>Opnieuw</Text>
-            </Pressable>
+              disabled={rematchPending}
+            />
 
-            <Pressable style={styles.cancelButton} onPress={() => playAgain(false)}>
-              <Text style={styles.cancelButtonText}>Lobby</Text>
-            </Pressable>
+            <GameButton
+              label="Terug naar lobby"
+              onPress={() => playAgain(false)}
+              tone="secondary"
+              disabled={rematchPending}
+            />
 
             <Text style={styles.voteText}>
-              Stemmen:{" "}
               {room.players.filter((player) => room.rematchVotes[player.id])
                 .length}
-              /{room.players.filter((player) => player.connected).length}
+              /{room.players.filter((player) => player.connected).length} spelers willen opnieuw
             </Text>
-          </View>
+          </GameModalFrame>
         </View>
       </Modal>
     </View>
@@ -806,6 +1031,95 @@ type HandLayout = {
   angleStep: number;
   handHeight: number;
 };
+
+type RuleBadge = {
+  label: string;
+  value: string;
+  tone: "neutral" | "danger" | "success" | "warning";
+};
+
+function getRuleBadges(room: PublicRoomState): RuleBadge[] {
+  const activeSuit = room.chosenSuit ?? room.topCard?.suit;
+  const badges: RuleBadge[] = [];
+
+  if (activeSuit) {
+    badges.push({
+      label: room.chosenSuit ? "Boer" : "Symbool",
+      value: suitLabels[activeSuit],
+      tone: room.chosenSuit ? "success" : "neutral",
+    });
+  }
+
+  if (room.pendingDraw > 0) {
+    badges.push({
+      label: "Straf",
+      value: `+${room.pendingDraw}`,
+      tone: "danger",
+    });
+  }
+
+  if (room.turnState === "seven_chain") {
+    badges.push({
+      label: "7-reeks",
+      value: room.sevenStopAfterNext
+        ? "extra kaart"
+        : room.sevenSuit
+        ? suitLabels[room.sevenSuit]
+        : "actief",
+      tone: "warning",
+    });
+  } else if (room.turnState === "must_play") {
+    badges.push({
+      label: "Heer",
+      value: room.canDraw ? "pak 1" : "extra",
+      tone: "warning",
+    });
+  } else if (room.turnState === "after_draw") {
+    badges.push({
+      label: "Na pak",
+      value: room.canPass ? "leg/pas" : "leg",
+      tone: "success",
+    });
+  }
+
+  return badges.slice(0, 3);
+}
+
+function getEndRanking(room: PublicRoomState) {
+  const rankedPlayers: {
+    label: string;
+    player: PublicPlayer;
+    isLoser: boolean;
+  }[] = [];
+  const usedPlayerIds = new Set<string>();
+
+  for (const playerId of room.finishedPlayerIds) {
+    const player = room.players.find((item) => item.id === playerId);
+
+    if (!player) continue;
+
+    rankedPlayers.push({
+      label: `#${rankedPlayers.length + 1}`,
+      player,
+      isLoser: false,
+    });
+    usedPlayerIds.add(player.id);
+  }
+
+  const loser =
+    room.players.find((player) => player.id === room.loserId) ??
+    room.players.find((player) => !usedPlayerIds.has(player.id));
+
+  if (loser && !usedPlayerIds.has(loser.id)) {
+    rankedPlayers.push({
+      label: "Laatste",
+      player: loser,
+      isLoser: true,
+    });
+  }
+
+  return rankedPlayers;
+}
 
 const symbolSortOrder: Record<Suit, number> = {
   hearts: 0,
@@ -839,6 +1153,17 @@ function compareCardsBySymbol(cardA: Card, cardB: Card) {
   if (symbolDiff !== 0) return symbolDiff;
 
   return valueSortOrder[cardA.value] - valueSortOrder[cardB.value];
+}
+
+function compareCardsByValue(cardA: Card, cardB: Card) {
+  const valueDiff = valueSortOrder[cardA.value] - valueSortOrder[cardB.value];
+
+  if (valueDiff !== 0) return valueDiff;
+
+  return (
+    (cardA.suit ? symbolSortOrder[cardA.suit] : 99) -
+    (cardB.suit ? symbolSortOrder[cardB.suit] : 99)
+  );
 }
 
 function getTurnCoachText({
@@ -877,7 +1202,23 @@ function getTurnCoachText({
   }
 
   if (room.turnState === "seven_chain") {
-    return "7-reeks: zelfde symbool of 7.";
+    if (room.sevenStopAfterNext) {
+      if (room.canDraw) {
+        return "Geen vervolgkaart: pak 1 kaart.";
+      }
+
+      return "Heer in 7: leg nog een kaart.";
+    }
+
+    return "7-reeks: symbool, 7 of dezelfde waarde.";
+  }
+
+  if (room.turnState === "must_play") {
+    if (room.canDraw) {
+      return "Geen vervolgkaart: pak 1 kaart.";
+    }
+
+    return "Heer: leg nog een kaart.";
   }
 
   if (playableCardsCount > 0) {
@@ -893,6 +1234,32 @@ function getTurnCoachText({
   }
 
   return "Even wachten.";
+}
+
+function getInvalidCardHint(room: PublicRoomState) {
+  if (room.pendingDraw > 0) {
+    return `+${room.pendingDraw}: stapel met 2/Joker of pak.`;
+  }
+
+  if (room.turnState === "seven_chain") {
+    if (room.sevenStopAfterNext) {
+      return "Heer in 7: leg exact 1 passende kaart.";
+    }
+
+    return room.sevenSuit
+      ? `7-reeks: speel ${suitLabels[room.sevenSuit]} of sluit correct af.`
+      : "7-reeks: speel een geldige vervolgkaart.";
+  }
+
+  if (room.turnState === "must_play") {
+    return "Heer: leg exact 1 passende extra kaart.";
+  }
+
+  if (room.chosenSuit) {
+    return `Boer vraagt ${suitLabels[room.chosenSuit]}.`;
+  }
+
+  return "Deze kaart past nu niet.";
 }
 
 function HandCard({
@@ -1069,11 +1436,19 @@ function OpponentSeat({
         compact && styles.opponentSeatCompact,
         isCurrent && styles.activeSeat,
         !player.connected && styles.offlineSeat,
+        player.waitingForNextRound && styles.offlineSeat,
+        player.finished && styles.finishedSeat,
       ]}
     >
       {isCurrent ? (
         <View style={styles.nowBadge}>
           <Text style={styles.nowBadgeText}>NU</Text>
+        </View>
+      ) : null}
+
+      {player.waitingForNextRound ? (
+        <View style={styles.spectatorBadge}>
+          <Text style={styles.spectatorBadgeText}>Kijkt mee</Text>
         </View>
       ) : null}
 
@@ -1110,17 +1485,25 @@ function OpponentSeat({
             compact && styles.playerSeatCardsCompact,
           ]}
         >
-          {player.cardCount} kaarten
+          {player.waitingForNextRound
+            ? "volgende ronde"
+            : player.finished
+            ? `uit${player.rank ? ` #${player.rank}` : ""}`
+            : `${player.cardCount} kaarten`}
         </Text>
       </View>
 
-      {player.cardCount === 1 ? (
+      {player.finished ? (
+        <View style={styles.oneCardBadge}>
+          <Text style={styles.oneCardBadgeText}>Uit</Text>
+        </View>
+      ) : player.cardCount === 1 && player.inRound ? (
         <View style={styles.oneCardBadge}>
           <Text style={styles.oneCardBadgeText}>Nog 1!</Text>
         </View>
       ) : null}
 
-      {!hideStack ? (
+      {!hideStack && player.inRound && !player.finished ? (
         <View style={[styles.backCards, compact && styles.backCardsCompact]}>
           <Image
             source={cardBackImage}

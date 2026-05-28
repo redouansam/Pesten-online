@@ -1,11 +1,19 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   cardBackOptions,
   defaultCardBackId,
   starterCardBackIds,
 } from "../cardBackImages";
+import {
+  avatarFrameOptions,
+  avatarOptions,
+  defaultAvatarFrameId,
+  defaultAvatarId,
+  starterAvatarFrameIds,
+  starterAvatarIds,
+} from "../cosmetics";
 import {
   defaultTableSkinId,
   starterTableSkinIds,
@@ -15,13 +23,16 @@ import {
   COINS_PER_GEM_PACK,
   DAILY_GEMS,
   DAILY_LOGIN_COINS,
+  DailyMission,
   GAME_PLAYED_COINS,
   GAME_PLAYED_XP,
   GAME_WIN_COINS,
   GAME_WIN_XP,
   GEM_PACK_COST,
   Wallet,
+  dailyMissions,
   defaultWallet,
+  getDailyMissionProgress,
   getMilestoneProgress,
   getSeasonProgress,
   milestoneRewards,
@@ -35,6 +46,40 @@ function todayKey() {
 }
 
 function normalizeWallet(value: Partial<Wallet> | null): Wallet {
+  const currentDay = todayKey();
+  const hasCurrentDailyProgress = value?.dailyMissionDate === currentDay;
+  const premiumAvatarIds = value?.premiumPass
+    ? avatarOptions
+        .filter((avatar) => avatar.premium)
+        .map((avatar) => avatar.id)
+    : [];
+  const ownedAvatarIds = Array.from(
+    new Set([
+      ...starterAvatarIds,
+      ...premiumAvatarIds,
+      ...(value?.ownedAvatarIds ?? []),
+    ])
+  );
+  const selectedAvatarId = ownedAvatarIds.includes(value?.selectedAvatarId ?? "")
+    ? value?.selectedAvatarId ?? defaultAvatarId
+    : defaultAvatarId;
+  const premiumFrameIds = value?.premiumPass
+    ? avatarFrameOptions
+        .filter((frame) => frame.premium)
+        .map((frame) => frame.id)
+    : [];
+  const ownedAvatarFrameIds = Array.from(
+    new Set([
+      ...starterAvatarFrameIds,
+      ...premiumFrameIds,
+      ...(value?.ownedAvatarFrameIds ?? []),
+    ])
+  );
+  const selectedAvatarFrameId = ownedAvatarFrameIds.includes(
+    value?.selectedAvatarFrameId ?? ""
+  )
+    ? value?.selectedAvatarFrameId ?? defaultAvatarFrameId
+    : defaultAvatarFrameId;
   const premiumCardBackIds = value?.premiumPass
     ? cardBackOptions
         .filter((cardBack) => cardBack.premium)
@@ -73,12 +118,26 @@ function normalizeWallet(value: Partial<Wallet> | null): Wallet {
   return {
     ...defaultWallet,
     ...value,
+    selectedAvatarId,
+    ownedAvatarIds,
+    selectedAvatarFrameId,
+    ownedAvatarFrameIds,
     selectedCardBackId,
     ownedCardBackIds,
     selectedTableSkinId,
     ownedTableSkinIds,
     gamesPlayed: value?.gamesPlayed ?? 0,
     wins: value?.wins ?? 0,
+    pestCardsPlayed: value?.pestCardsPlayed ?? 0,
+    dailyMissionDate: currentDay,
+    dailyMissionClaims: hasCurrentDailyProgress
+      ? value?.dailyMissionClaims ?? []
+      : [],
+    dailyGamesPlayed: hasCurrentDailyProgress ? value?.dailyGamesPlayed ?? 0 : 0,
+    dailyWins: hasCurrentDailyProgress ? value?.dailyWins ?? 0 : 0,
+    dailyPestCardsPlayed: hasCurrentDailyProgress
+      ? value?.dailyPestCardsPlayed ?? 0
+      : 0,
     winStreak: value?.winStreak ?? 0,
     bestWinStreak: value?.bestWinStreak ?? 0,
     claimedMilestoneRewards: value?.claimedMilestoneRewards ?? [],
@@ -91,6 +150,11 @@ export function useEconomy() {
   const [wallet, setWallet] = useState<Wallet>(defaultWallet);
   const [loaded, setLoaded] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const walletRef = useRef(wallet);
+
+  useEffect(() => {
+    walletRef.current = wallet;
+  }, [wallet]);
 
   useEffect(() => {
     async function loadWallet() {
@@ -188,16 +252,19 @@ export function useEconomy() {
   function claimDailyGems() {
     const currentDay = todayKey();
 
-    if (wallet.lastGemReward === currentDay) {
+    if (walletRef.current.lastGemReward === currentDay) {
       setNotice("Je daily gem chest is vandaag al geclaimd.");
       return;
     }
 
-    setWallet((currentWallet) => ({
-      ...currentWallet,
-      gems: currentWallet.gems + DAILY_GEMS,
+    const nextWallet = {
+      ...walletRef.current,
+      gems: walletRef.current.gems + DAILY_GEMS,
       lastGemReward: currentDay,
-    }));
+    };
+
+    walletRef.current = nextWallet;
+    setWallet(nextWallet);
     setNotice(`Daily gem chest: +${DAILY_GEMS} gems.`);
   }
 
@@ -330,6 +397,128 @@ export function useEconomy() {
     setNotice(`${tableSkin.title} gekocht en ingesteld.`);
   }
 
+  function selectAvatar(avatarId: string) {
+    const avatar = avatarOptions.find((item) => item.id === avatarId);
+
+    if (!avatar) return;
+
+    const isOwned =
+      wallet.ownedAvatarIds.includes(avatar.id) ||
+      (avatar.premium && wallet.premiumPass);
+
+    if (!isOwned) {
+      setNotice(
+        avatar.premium ? "Deze avatar hoort bij de premium pass." : "Koop deze avatar eerst."
+      );
+      return;
+    }
+
+    setWallet((currentWallet) => ({
+      ...currentWallet,
+      selectedAvatarId: avatar.id,
+    }));
+    setNotice(`${avatar.title} is nu je avatar.`);
+  }
+
+  function buyAvatar(avatarId: string) {
+    const avatar = avatarOptions.find((item) => item.id === avatarId);
+
+    if (!avatar) return;
+
+    if (wallet.ownedAvatarIds.includes(avatar.id)) {
+      selectAvatar(avatar.id);
+      return;
+    }
+
+    if (avatar.premium) {
+      setNotice("Premium avatars komen later met de premium pass.");
+      return;
+    }
+
+    if (avatar.unlockLevel && season.level < avatar.unlockLevel) {
+      setNotice(`Bereik level ${avatar.unlockLevel} om dit te unlocken.`);
+      return;
+    }
+
+    const priceCoins = avatar.priceCoins ?? 0;
+
+    if (wallet.coins < priceCoins) {
+      setNotice(`Je hebt ${priceCoins} coins nodig voor ${avatar.title}.`);
+      return;
+    }
+
+    setWallet((currentWallet) => ({
+      ...currentWallet,
+      coins: Math.max(0, currentWallet.coins - priceCoins),
+      ownedAvatarIds: [...new Set([...currentWallet.ownedAvatarIds, avatar.id])],
+      selectedAvatarId: avatar.id,
+    }));
+    setNotice(`${avatar.title} gekocht en ingesteld.`);
+  }
+
+  function selectAvatarFrame(frameId: string) {
+    const frame = avatarFrameOptions.find((item) => item.id === frameId);
+
+    if (!frame) return;
+
+    const isOwned =
+      wallet.ownedAvatarFrameIds.includes(frame.id) ||
+      (frame.premium && wallet.premiumPass);
+
+    if (!isOwned) {
+      setNotice(
+        frame.premium
+          ? "Dit frame hoort bij de premium pass."
+          : "Koop of unlock dit frame eerst."
+      );
+      return;
+    }
+
+    setWallet((currentWallet) => ({
+      ...currentWallet,
+      selectedAvatarFrameId: frame.id,
+    }));
+    setNotice(`${frame.title} is nu je avatar frame.`);
+  }
+
+  function buyAvatarFrame(frameId: string) {
+    const frame = avatarFrameOptions.find((item) => item.id === frameId);
+
+    if (!frame) return;
+
+    if (wallet.ownedAvatarFrameIds.includes(frame.id)) {
+      selectAvatarFrame(frame.id);
+      return;
+    }
+
+    if (frame.premium) {
+      setNotice("Premium frames komen later met de premium pass.");
+      return;
+    }
+
+    if (frame.unlockLevel && season.level < frame.unlockLevel) {
+      setNotice(`Bereik level ${frame.unlockLevel} om dit frame te unlocken.`);
+      return;
+    }
+
+    const priceCoins = frame.priceCoins ?? 0;
+
+    if (wallet.coins < priceCoins) {
+      setNotice(`Je hebt ${priceCoins} coins nodig voor ${frame.title}.`);
+      return;
+    }
+
+    setWallet((currentWallet) => ({
+      ...currentWallet,
+      coins: Math.max(0, currentWallet.coins - priceCoins),
+      ownedAvatarFrameIds: [
+        ...new Set([...currentWallet.ownedAvatarFrameIds, frame.id]),
+      ],
+      selectedAvatarFrameId: frame.id,
+    }));
+    setNotice(`${frame.title} gekocht en ingesteld.`);
+  }
+
   function recordGameResult(roundKey: string, didWin: boolean) {
     const rewardKey = `round-${roundKey}`;
 
@@ -349,6 +538,9 @@ export function useEconomy() {
         xp: currentWallet.xp + earnedXp,
         gamesPlayed: currentWallet.gamesPlayed + 1,
         wins: currentWallet.wins + (didWin ? 1 : 0),
+        dailyMissionDate: todayKey(),
+        dailyGamesPlayed: currentWallet.dailyGamesPlayed + 1,
+        dailyWins: currentWallet.dailyWins + (didWin ? 1 : 0),
         winStreak: didWin ? currentWallet.winStreak + 1 : 0,
         bestWinStreak: didWin
           ? Math.max(currentWallet.bestWinStreak, currentWallet.winStreak + 1)
@@ -361,6 +553,48 @@ export function useEconomy() {
         ? `Gewonnen: +${earnedCoins} coins en +${earnedXp} XP.`
         : `Potje gespeeld: +${earnedCoins} coins en +${earnedXp} XP.`
     );
+  }
+
+  function recordPestCardPlayed() {
+    setWallet((currentWallet) => ({
+      ...currentWallet,
+      dailyMissionDate: todayKey(),
+      pestCardsPlayed: currentWallet.pestCardsPlayed + 1,
+      dailyPestCardsPlayed: currentWallet.dailyPestCardsPlayed + 1,
+    }));
+  }
+
+  function claimDailyMission(missionId: string) {
+    const mission = dailyMissions.find((item) => item.id === missionId);
+
+    if (!mission) return;
+
+    if (wallet.dailyMissionClaims.includes(mission.id)) {
+      setNotice("Deze dagmissie is al geclaimd.");
+      return;
+    }
+
+    if (getDailyMissionProgress(wallet, mission) < mission.target) {
+      setNotice("Deze dagmissie is nog niet klaar.");
+      return;
+    }
+
+    setWallet((currentWallet) => ({
+      ...currentWallet,
+      coins: currentWallet.coins + (mission.coins ?? 0),
+      gems: currentWallet.gems + (mission.gems ?? 0),
+      xp: currentWallet.xp + (mission.xp ?? 0),
+      dailyMissionDate: todayKey(),
+      dailyMissionClaims: [...currentWallet.dailyMissionClaims, mission.id],
+    }));
+
+    const rewards = [
+      mission.coins ? `+${mission.coins} coins` : null,
+      mission.gems ? `+${mission.gems} gems` : null,
+      mission.xp ? `+${mission.xp} XP` : null,
+    ].filter(Boolean);
+
+    setNotice(`${mission.title} geclaimd: ${rewards.join(" en ")}.`);
   }
 
   function claimSeasonReward(rewardId: string) {
@@ -387,11 +621,24 @@ export function useEconomy() {
       const ownedCardBackIds = reward.cardBackId
         ? [...new Set([...currentWallet.ownedCardBackIds, reward.cardBackId])]
         : currentWallet.ownedCardBackIds;
+      const ownedAvatarFrameIds = reward.avatarFrameId
+        ? [
+            ...new Set([
+              ...currentWallet.ownedAvatarFrameIds,
+              reward.avatarFrameId,
+            ]),
+          ]
+        : currentWallet.ownedAvatarFrameIds;
+      const ownedTableSkinIds = reward.tableSkinId
+        ? [...new Set([...currentWallet.ownedTableSkinIds, reward.tableSkinId])]
+        : currentWallet.ownedTableSkinIds;
 
       return {
         ...currentWallet,
         coins: currentWallet.coins + (reward.coins ?? 0),
         ownedCardBackIds,
+        ownedAvatarFrameIds,
+        ownedTableSkinIds,
         claimedSeasonRewards: [
           ...currentWallet.claimedSeasonRewards,
           reward.id,
@@ -454,7 +701,13 @@ export function useEconomy() {
     selectCardBack,
     buyTableSkin,
     selectTableSkin,
+    buyAvatar,
+    selectAvatar,
+    buyAvatarFrame,
+    selectAvatarFrame,
     recordGameResult,
+    recordPestCardPlayed,
+    claimDailyMission,
     claimSeasonReward,
     claimMilestoneReward,
   };

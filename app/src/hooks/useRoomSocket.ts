@@ -1,7 +1,7 @@
 import * as Haptics from "expo-haptics";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useEffect, useRef, useState } from "react";
-import { Keyboard, Platform } from "react-native";
+import { Keyboard } from "react-native";
 
 import {
   STORAGE_PLAYER_ID,
@@ -18,6 +18,7 @@ type PendingAction =
   | "ready"
   | "start"
   | "redraw"
+  | "rematch"
   | null;
 
 export type ConnectionState =
@@ -57,8 +58,6 @@ export function useRoomSocket(hapticsEnabled = true) {
     loadProfileName().catch(() => {});
 
     async function tryReconnect() {
-      if (Platform.OS === "web") return;
-
       const savedPlayerId = await sessionStore.getItem(STORAGE_PLAYER_ID);
       const savedRoomCode = await sessionStore.getItem(STORAGE_ROOM_CODE);
 
@@ -81,7 +80,7 @@ export function useRoomSocket(hapticsEnabled = true) {
       setConnected(false);
       setConnectionState("offline");
       setPendingAction(null);
-      setErrorMessage("Verbinding met de server is weggevallen.");
+      setErrorMessage("Verbinding weggevallen. We verbinden automatisch opnieuw.");
     }
 
     function onReconnectAttempt() {
@@ -91,11 +90,18 @@ export function useRoomSocket(hapticsEnabled = true) {
     function onReconnect() {
       setConnectionState("online");
       setErrorMessage(null);
+      tryReconnect().catch(() => {});
     }
 
     function onReconnectFailed() {
       setConnectionState("offline");
       setErrorMessage("Opnieuw verbinden lukt niet. Check je netwerk.");
+    }
+
+    function onConnectError() {
+      setConnected(false);
+      setConnectionState("reconnecting");
+      setErrorMessage("Server wordt wakker. Dit kan 30-60 sec duren.");
     }
 
     async function saveSession(data: { code: string; playerId: string }) {
@@ -126,6 +132,9 @@ export function useRoomSocket(hapticsEnabled = true) {
       sessionStore.multiRemove([STORAGE_PLAYER_ID, STORAGE_ROOM_CODE]).catch(
         () => {}
       );
+      setPendingAction(null);
+      setRoom(null);
+      setPlayerId("");
       setErrorMessage("Kamer niet gevonden. Maak of join opnieuw.");
     }
 
@@ -153,9 +162,40 @@ export function useRoomSocket(hapticsEnabled = true) {
     socket.on("reconnect_failed", onSessionReconnectFailed);
     socket.on("room_updated", onRoomUpdated);
     socket.on("error_message", onErrorMessage);
+    socket.on("connect_error", onConnectError);
     socket.io.on("reconnect_attempt", onReconnectAttempt);
     socket.io.on("reconnect", onReconnect);
     socket.io.on("reconnect_failed", onReconnectFailed);
+
+    function resumeFromBackground() {
+      setConnectionState(socket.connected ? "online" : "reconnecting");
+      setErrorMessage(null);
+
+      if (!socket.connected) {
+        socket.connect();
+      }
+
+      tryReconnect().catch(() => {});
+    }
+
+    function onVisibilityChange() {
+      if (typeof document === "undefined" || document.visibilityState !== "visible") {
+        return;
+      }
+
+      resumeFromBackground();
+    }
+
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", onVisibilityChange);
+    }
+
+    if (
+      typeof window !== "undefined" &&
+      typeof window.addEventListener === "function"
+    ) {
+      window.addEventListener("pageshow", resumeFromBackground);
+    }
 
     return () => {
       socket.off("connect", onConnect);
@@ -166,9 +206,19 @@ export function useRoomSocket(hapticsEnabled = true) {
       socket.off("reconnect_failed", onSessionReconnectFailed);
       socket.off("room_updated", onRoomUpdated);
       socket.off("error_message", onErrorMessage);
+      socket.off("connect_error", onConnectError);
       socket.io.off("reconnect_attempt", onReconnectAttempt);
       socket.io.off("reconnect", onReconnect);
       socket.io.off("reconnect_failed", onReconnectFailed);
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", onVisibilityChange);
+      }
+      if (
+        typeof window !== "undefined" &&
+        typeof window.removeEventListener === "function"
+      ) {
+        window.removeEventListener("pageshow", resumeFromBackground);
+      }
       socket.disconnect();
     };
   }, []);
@@ -266,7 +316,16 @@ export function useRoomSocket(hapticsEnabled = true) {
     socket.emit("redraw_drawn_card");
   }
 
+  function sortHand(mode: "suit" | "value") {
+    if (hapticsEnabled) Haptics.selectionAsync().catch(() => {});
+    socket.emit("sort_hand", {
+      mode,
+    });
+  }
+
   function playAgain(wantsAgain: boolean) {
+    setPendingAction("rematch");
+    setErrorMessage(null);
     socket.emit("play_again_response", {
       wantsAgain,
     });
@@ -319,6 +378,7 @@ export function useRoomSocket(hapticsEnabled = true) {
     drawCards,
     passTurn,
     redrawDrawnCard,
+    sortHand,
     playAgain,
   };
 }

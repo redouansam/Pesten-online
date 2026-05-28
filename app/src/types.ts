@@ -35,6 +35,10 @@ export type PublicPlayer = {
   connected: boolean;
   ready: boolean;
   cardCount: number;
+  inRound: boolean;
+  finished: boolean;
+  waitingForNextRound: boolean;
+  rank?: number;
 };
 
 export type PublicRoomState = {
@@ -62,6 +66,8 @@ export type PublicRoomState = {
   canPass: boolean;
 
   winnerId?: string;
+  loserId?: string;
+  finishedPlayerIds: string[];
   lastMessage?: string;
 
   rematchVotes: Record<string, boolean>;

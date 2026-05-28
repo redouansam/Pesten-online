@@ -1,12 +1,55 @@
 import { StyleSheet } from "react-native";
+import { calmTheme } from "../theme";
 
 export const sharedStyles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: "#06140f",
+    backgroundColor: calmTheme.colors.background,
   },
   background: {
     flex: 1,
+    overflow: "hidden",
+  },
+  backgroundGlowTop: {
+    position: "absolute",
+    top: -130,
+    right: -90,
+    width: 260,
+    height: 260,
+    borderRadius: 999,
+    backgroundColor: "rgba(210,168,78,0.08)",
+  },
+  backgroundGlowBottom: {
+    position: "absolute",
+    bottom: -150,
+    left: -110,
+    width: 310,
+    height: 310,
+    borderRadius: 999,
+    backgroundColor: "rgba(111,174,148,0.07)",
+  },
+  backgroundCoin: {
+    position: "absolute",
+    top: 92,
+    left: -34,
+    width: 96,
+    height: 96,
+    borderRadius: 999,
+    backgroundColor: "rgba(210,168,78,0.07)",
+    borderWidth: 10,
+    borderColor: "rgba(210,168,78,0.08)",
+    transform: [{ rotate: "-18deg" }],
+  },
+  backgroundCoinSmall: {
+    position: "absolute",
+    right: 22,
+    bottom: 90,
+    width: 46,
+    height: 46,
+    borderRadius: 999,
+    backgroundColor: "rgba(247,243,236,0.05)",
+    borderWidth: 5,
+    borderColor: "rgba(210,168,78,0.09)",
   },
   screenTransition: {
     flex: 1,
@@ -117,5 +160,60 @@ export const sharedStyles = StyleSheet.create({
     fontWeight: "900",
     fontSize: 12,
     textAlign: "center",
+  },
+  surfaceCard: {
+    backgroundColor: calmTheme.colors.surface,
+    borderRadius: calmTheme.radius.xl,
+    padding: calmTheme.spacing.lg,
+    borderWidth: 1,
+    borderColor: calmTheme.colors.border,
+    shadowColor: "#000",
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
+    elevation: 3,
+  },
+  surfaceCardSubdued: {
+    backgroundColor: "rgba(247,243,236,0.92)",
+    shadowOpacity: 0.04,
+    elevation: 1,
+  },
+  sectionHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: calmTheme.spacing.md,
+  },
+  sectionHeaderCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  sectionTitle: {
+    color: calmTheme.colors.text,
+    fontSize: 16,
+    fontWeight: "900",
+  },
+  sectionSubtitle: {
+    color: calmTheme.colors.textMuted,
+    fontSize: 12,
+    fontWeight: "700",
+    lineHeight: 17,
+    marginTop: 2,
+  },
+  sectionAction: {
+    minHeight: 32,
+    borderRadius: calmTheme.radius.pill,
+    paddingHorizontal: calmTheme.spacing.md,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: calmTheme.colors.surfaceMuted,
+  },
+  sectionActionText: {
+    color: calmTheme.colors.text,
+    fontSize: 11,
+    fontWeight: "900",
   },
 });

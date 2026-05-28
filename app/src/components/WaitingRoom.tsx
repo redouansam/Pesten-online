@@ -38,7 +38,7 @@ export function WaitingRoom({
   const connectedGuests = connectedPlayers.filter(
     (player) => player.id !== room.hostId
   );
-  const readyPlayers = isHost ? connectedGuests : connectedPlayers;
+  const readyPlayers = connectedGuests;
   const readyCount = readyPlayers.filter((player) => player.ready).length;
   const readyTotal = readyPlayers.length;
   const readyPercent =
@@ -52,31 +52,22 @@ export function WaitingRoom({
   const canStart = isHost && hasEnoughPlayers && guestsReady;
   const readyPending = pendingAction === "ready";
   const startPending = pendingAction === "start";
-  const startHint = !isHost
-    ? "Zet jezelf klaar."
-    : !hasEnoughPlayers
-    ? "Nodig iemand uit."
-    : !guestsReady
-    ? "Wacht op klaar."
-    : "Start de tafel.";
-  const nextStepTitle = !isHost
-    ? me?.ready
-      ? "Je bent klaar"
-      : "Zet klaar"
+  const readyLabel =
+    readyTotal === 0 ? "Wacht op spelers" : `${readyCount}/${readyTotal} klaar`;
+  const tableStatus = !hasEnoughPlayers
+    ? "Minimaal 2 spelers nodig"
     : canStart
-    ? "Start nu"
-    : !hasEnoughPlayers
-    ? "Deel code"
-    : "Bijna klaar";
-  const nextStepText = !isHost
+    ? "Klaar om te starten"
+    : readyLabel;
+  const actionHint = !isHost
     ? me?.ready
       ? "Host start zo."
-      : "Tik onderaan."
+      : "Tik op klaar."
     : canStart
     ? "Iedereen is klaar."
     : !hasEnoughPlayers
-    ? "Minimaal 2 spelers."
-    : `${readyCount}/${readyTotal} klaar`;
+    ? "Deel je code."
+    : "Wacht op klaar.";
 
   const slots: Array<PublicPlayer | null> = [...room.players];
 
@@ -87,13 +78,13 @@ export function WaitingRoom({
   async function copyCode() {
     await Clipboard.setStringAsync(room.code);
     if (hapticsEnabled) Haptics.selectionAsync().catch(() => {});
-    Alert.alert("Gekopieerd", `Kamer code ${room.code} is gekopieerd.`);
+    Alert.alert("Gekopieerd", `Kamercode ${room.code} is gekopieerd.`);
   }
 
   async function shareCode() {
     if (hapticsEnabled) Haptics.selectionAsync().catch(() => {});
     await Share.share({
-      message: `Join mijn Pesten kamer met code: ${room.code}`,
+      message: `Doe mee met mijn Pesten-kamer met code: ${room.code}`,
     });
   }
 
@@ -123,10 +114,14 @@ export function WaitingRoom({
     >
       <View style={styles.lobbyPanel}>
         <View style={styles.lobbyHeader}>
-          <View>
+          <View style={styles.lobbyHeaderCopy}>
             <Text style={styles.lobbyEyebrow}>Wachtkamer</Text>
-            <Text style={styles.lobbyTitle}>Team klaar?</Text>
-            <Text style={styles.lobbySubtitle}>{startHint}</Text>
+            <Text style={styles.lobbyTitle} numberOfLines={1}>
+              Wacht op spelers
+            </Text>
+            <Text style={styles.lobbySubtitle} numberOfLines={2}>
+              {actionHint}
+            </Text>
           </View>
 
           <View style={styles.playerCountPill}>
@@ -136,22 +131,7 @@ export function WaitingRoom({
           </View>
         </View>
 
-        <View style={styles.codeHeroCard}>
-          <View>
-            <Text style={styles.codeLabel}>Kamercode</Text>
-            <Text style={styles.codeValue}>{room.code}</Text>
-          </View>
-
-          <View style={styles.codeActionsVertical}>
-            <Pressable style={styles.codeActionButton} onPress={copyCode}>
-              <Text style={styles.codeActionText}>Kopieer</Text>
-            </Pressable>
-
-            <Pressable style={styles.codeActionButtonGold} onPress={shareCode}>
-              <Text style={styles.codeActionTextGold}>Deel</Text>
-            </Pressable>
-          </View>
-        </View>
+        <RoomCodeCard code={room.code} onCopy={copyCode} onShare={shareCode} />
 
         {connectionState !== "online" ? (
           <View style={styles.connectionHelpCard}>
@@ -164,14 +144,14 @@ export function WaitingRoom({
                   : "Offline"}
               </Text>
               <Text style={styles.connectionHelpText}>
-                Room blijft bewaard als je terugkomt.
+                Room blijft bewaard. Op gratis hosting kan wakker worden 30-60 sec duren.
               </Text>
             </View>
             <Pressable
               style={styles.connectionRetryButton}
               onPress={retryConnection}
             >
-              <Text style={styles.connectionRetryText}>Retry</Text>
+              <Text style={styles.connectionRetryText}>Opnieuw</Text>
             </Pressable>
           </View>
         ) : null}
@@ -194,40 +174,23 @@ export function WaitingRoom({
           </View>
         ) : null}
 
-        <View style={styles.roomStepCard}>
-          <View style={styles.roomStepBadge}>
-            <Text style={styles.roomStepBadgeText}>Nu</Text>
-          </View>
-          <View style={styles.roomStepCopy}>
-            <Text style={styles.roomStepTitle}>{nextStepTitle}</Text>
-            <Text style={styles.roomStepText}>{nextStepText}</Text>
-          </View>
-        </View>
-
         <View style={styles.readyCard}>
           <View style={styles.readyTopRow}>
-            <Text style={styles.readyTitle}>
-              Klaar
-            </Text>
-            <Text style={styles.readyNumber}>
-              {readyCount}/{readyTotal}
-            </Text>
+            <View style={styles.readyCopy}>
+              <Text style={styles.readyTitle}>Tafelstatus</Text>
+              <Text style={styles.readyHelper} numberOfLines={1}>
+                {tableStatus}
+              </Text>
+            </View>
+            <View style={styles.lobbyOnlinePill}>
+              <Text style={styles.lobbyOnlinePillText} numberOfLines={1}>
+                {connectedPlayers.length}/4 online
+              </Text>
+            </View>
           </View>
 
           <View style={styles.progressTrack}>
             <View style={[styles.progressFill, { width: `${readyPercent}%` }]} />
-          </View>
-        </View>
-
-        <View style={styles.roomFactsRow}>
-          <View style={styles.roomFactChip}>
-            <Text style={styles.roomFactText}>2-4 spelers</Text>
-          </View>
-          <View style={styles.roomFactChip}>
-            <Text style={styles.roomFactText}>Klaar = start</Text>
-          </View>
-          <View style={styles.roomFactChip}>
-            <Text style={styles.roomFactText}>Geen pest-finish</Text>
           </View>
         </View>
 
@@ -241,84 +204,19 @@ export function WaitingRoom({
 
           {slots.slice(0, 4).map((player, index) => {
             if (!player) {
-              return (
-                <View key={`empty-${index}`} style={styles.emptySlotRow}>
-                  <View style={styles.emptyAvatar}>
-                    <Text style={styles.emptyAvatarText}>+</Text>
-                  </View>
-
-                  <View style={styles.emptySlotCopy}>
-                    <Text style={styles.emptySlotTitle}>Open plek</Text>
-                  </View>
-                </View>
-              );
+              return <EmptyPlayerSlot key={`empty-${index}`} />;
             }
 
             const isMe = player.id === playerId;
             const isRoomHost = player.id === room.hostId;
 
             return (
-              <View
+              <LobbyPlayerSlot
                 key={player.id}
-                style={[
-                  styles.playerRowCard,
-                  !player.connected && styles.playerSlotOffline,
-                  player.ready && styles.playerSlotReady,
-                ]}
-              >
-                <View style={styles.slotAvatar}>
-                  <Text style={styles.slotAvatarText}>
-                    {player.name.slice(0, 1).toUpperCase()}
-                  </Text>
-                </View>
-
-                <View style={styles.playerRowMain}>
-                  <Text style={styles.slotName} numberOfLines={1}>
-                    {player.name}
-                  </Text>
-
-                  <View style={styles.slotTags}>
-                    {isRoomHost ? (
-                      <View style={styles.hostTag}>
-                        <Text style={styles.hostTagText}>Host</Text>
-                      </View>
-                    ) : null}
-
-                    {isMe ? (
-                      <View style={styles.youTag}>
-                        <Text style={styles.youTagText}>Jij</Text>
-                      </View>
-                    ) : null}
-                  </View>
-                </View>
-
-                <View style={styles.playerRowRight}>
-                  <View
-                    style={[
-                      styles.slotStatusDot,
-                      player.connected
-                        ? styles.slotStatusOnline
-                        : styles.slotStatusOffline,
-                    ]}
-                  />
-
-                  <View
-                    style={[
-                      styles.readyMiniBadge,
-                      player.ready && styles.readyMiniBadgeOn,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.readyMiniBadgeText,
-                        player.ready && styles.readyMiniBadgeTextOn,
-                      ]}
-                    >
-                      {player.ready ? "Klaar" : "Wacht"}
-                    </Text>
-                  </View>
-                </View>
-              </View>
+                player={player}
+                isMe={isMe}
+                isRoomHost={isRoomHost}
+              />
             );
           })}
         </View>
@@ -355,7 +253,7 @@ export function WaitingRoom({
               disabled={!canStart || startPending}
             >
               <Text style={styles.startButtonText}>
-                {startPending ? "Start..." : "Start"}
+                {startPending ? "Start..." : "Start tafel"}
               </Text>
             </Pressable>
           ) : (
@@ -365,10 +263,131 @@ export function WaitingRoom({
           )}
 
           <Pressable style={styles.leaveButtonWide} onPress={handleLeaveRoom}>
-            <Text style={styles.leaveButtonText}>Verlaat</Text>
+            <Text style={styles.leaveButtonText}>Verlaat tafel</Text>
           </Pressable>
         </View>
       </View>
     </ScrollView>
+  );
+}
+
+function RoomCodeCard({
+  code,
+  onCopy,
+  onShare,
+}: {
+  code: string;
+  onCopy: () => void;
+  onShare: () => void;
+}) {
+  return (
+    <View style={styles.codeHeroCard}>
+      <View style={styles.codeHeroCopy}>
+        <Text style={styles.codeLabel}>Kamercode</Text>
+        <Text
+          style={styles.codeValue}
+          numberOfLines={1}
+          adjustsFontSizeToFit
+          minimumFontScale={0.74}
+        >
+          {code}
+        </Text>
+      </View>
+
+      <View style={styles.codeActionsVertical}>
+        <Pressable style={styles.codeActionButton} onPress={onCopy}>
+          <Text style={styles.codeActionText}>Kopieer</Text>
+        </Pressable>
+
+        <Pressable style={styles.codeActionButtonGold} onPress={onShare}>
+          <Text style={styles.codeActionTextGold}>Delen</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+function LobbyPlayerSlot({
+  player,
+  isMe,
+  isRoomHost,
+}: {
+  player: PublicPlayer;
+  isMe: boolean;
+  isRoomHost: boolean;
+}) {
+  return (
+    <View
+      style={[
+        styles.playerRowCard,
+        !player.connected && styles.playerSlotOffline,
+        player.ready && styles.playerSlotReady,
+      ]}
+    >
+      <View style={styles.slotAvatar}>
+        <Text style={styles.slotAvatarText}>
+          {player.name.slice(0, 1).toUpperCase()}
+        </Text>
+      </View>
+
+      <View style={styles.playerRowMain}>
+        <Text style={styles.slotName} numberOfLines={1}>
+          {player.name}
+        </Text>
+
+        <View style={styles.slotTags}>
+          {isRoomHost ? (
+            <View style={styles.hostTag}>
+              <Text style={styles.hostTagText}>Host</Text>
+            </View>
+          ) : null}
+
+          {isMe ? (
+            <View style={styles.youTag}>
+              <Text style={styles.youTagText}>Jij</Text>
+            </View>
+          ) : null}
+        </View>
+      </View>
+
+      <View style={styles.playerRowRight}>
+        <View
+          style={[
+            styles.slotStatusDot,
+            player.connected ? styles.slotStatusOnline : styles.slotStatusOffline,
+          ]}
+        />
+
+        <View
+          style={[
+            styles.readyMiniBadge,
+            player.ready && styles.readyMiniBadgeOn,
+          ]}
+        >
+          <Text
+            style={[
+              styles.readyMiniBadgeText,
+              player.ready && styles.readyMiniBadgeTextOn,
+            ]}
+          >
+            {player.ready ? "Klaar" : "Wacht"}
+          </Text>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+function EmptyPlayerSlot() {
+  return (
+    <View style={styles.emptySlotRow}>
+      <View style={styles.emptyAvatar}>
+        <Text style={styles.emptyAvatarText}>+</Text>
+      </View>
+
+      <View style={styles.emptySlotCopy}>
+        <Text style={styles.emptySlotTitle}>Open plek</Text>
+      </View>
+    </View>
   );
 }

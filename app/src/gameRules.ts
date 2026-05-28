@@ -1,20 +1,26 @@
 import { Card, PublicRoomState } from "./types";
 
 export function getTurnText(room: PublicRoomState) {
+  if (room.pendingDraw > 0) {
+    return `Pak +${room.pendingDraw} of stapel`;
+  }
+
   if (room.turnState === "after_draw") {
     return "Leg een kaart of pas";
   }
 
   if (room.turnState === "must_play") {
-    return "Heer: leg nog een kaart";
+    return room.canDraw ? "Heer: pak 1 kaart" : "Heer: leg nog een kaart";
   }
 
   if (room.turnState === "seven_chain") {
     if (room.sevenStopAfterNext) {
-      return "Heer in 7: leg nog een kaart";
+      return room.canDraw
+        ? "Heer in 7: pak 1 kaart"
+        : "Heer in 7: leg nog een kaart";
     }
 
-    return "7 actief: zelfde symbool, direct na 7 mag nog een 7";
+    return "7 actief: zelfde symbool, 7 of afsluiten met dezelfde waarde";
   }
 
   return "Jij bent aan de beurt";
@@ -26,6 +32,10 @@ export function isCardPlayable(room: PublicRoomState, card: Card) {
   if (!topCard) return true;
 
   if (room.turnState === "seven_chain") {
+    if (room.sevenStopAfterNext) {
+      return isNormalTurnCardPlayable(room, card);
+    }
+
     if (card.suit === room.sevenSuit) return true;
     if (card.value === "7" && topCard.value === "7") return true;
 
@@ -47,6 +57,14 @@ export function isCardPlayable(room: PublicRoomState, card: Card) {
       card.value === topCard.value
     );
   }
+
+  return isNormalTurnCardPlayable(room, card);
+}
+
+function isNormalTurnCardPlayable(room: PublicRoomState, card: Card) {
+  const topCard = room.topCard;
+
+  if (!topCard) return true;
 
   if (room.pendingDraw > 0) {
     return card.value === "2" || card.value === "JOKER";

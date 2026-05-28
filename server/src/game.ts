@@ -49,6 +49,8 @@ export function createRoom(code: string, host: Player): GameRoom {
     pendingDraw: 0,
     turnState: "normal",
 
+    roundPlayerIds: [],
+    finishedPlayerIds: [],
     rematchVotes: {},
   };
 }
@@ -127,11 +129,15 @@ export function startGame(room: GameRoom) {
   room.redrawOffer = undefined;
 
   room.winnerId = undefined;
+  room.loserId = undefined;
+  room.finishedPlayerIds = [];
   room.lastMessage = "Kaarten worden gedeeld...";
   room.rematchVotes = {};
 
   room.started = true;
   room.roundId += 1;
+
+  room.roundPlayerIds = room.players.map((player) => player.id);
 
   for (const player of room.players) {
     player.ready = false;
@@ -166,6 +172,9 @@ export function resetToLobby(room: GameRoom) {
   room.sevenStopAfterNext = false;
   room.redrawOffer = undefined;
   room.winnerId = undefined;
+  room.loserId = undefined;
+  room.roundPlayerIds = [];
+  room.finishedPlayerIds = [];
   room.lastMessage = undefined;
   room.rematchVotes = {};
 
@@ -184,6 +193,31 @@ export function getCurrentPlayer(room: GameRoom) {
 
 function getPlayerName(room: GameRoom, playerId: string) {
   return room.players.find((player) => player.id === playerId)?.name ?? "Speler";
+}
+
+function isRoundPlayer(room: GameRoom, playerId: string) {
+  return room.roundPlayerIds.includes(playerId);
+}
+
+function isFinishedPlayer(room: GameRoom, playerId: string) {
+  return room.finishedPlayerIds.includes(playerId);
+}
+
+function isActiveTurnPlayer(room: GameRoom, player: Player) {
+  if (!room.started) return true;
+  if (room.turnState === "finished" || room.loserId) return false;
+
+  return (
+    player.connected &&
+    isRoundPlayer(room, player.id) &&
+    !isFinishedPlayer(room, player.id)
+  );
+}
+
+function getRemainingRoundPlayers(room: GameRoom) {
+  return room.players.filter(
+    (player) => isRoundPlayer(room, player.id) && !isFinishedPlayer(room, player.id)
+  );
 }
 
 function getActiveSuit(room: GameRoom) {
@@ -276,17 +310,30 @@ function isSevenSameValueFinish(
 }
 
 export function canPlayCard(room: GameRoom, card: Card, playerId?: string) {
-  const topCard = getTopCard(room);
   const activePlayerId = playerId ?? getCurrentPlayer(room)?.id;
 
-  if (!topCard) return true;
+  if (
+    activePlayerId &&
+    room.started &&
+    (!isRoundPlayer(room, activePlayerId) || isFinishedPlayer(room, activePlayerId))
+  ) {
+    return false;
+  }
 
   if (room.turnState === "seven_chain") {
+    if (room.sevenStopAfterNext) {
+      return canPlayNormalTurnCard(room, card);
+    }
+
     if (card.suit === room.sevenSuit) return true;
     if (isPlayableSevenInChain(room, card)) return true;
 
     if (!activePlayerId) return false;
     if (!room.sevenSuit) return false;
+
+    const topCard = getTopCard(room);
+
+    if (!topCard) return true;
 
     const stillHasSevenSuit = hasOtherCardOfSuit(
       room,
@@ -306,6 +353,14 @@ export function canPlayCard(room: GameRoom, card: Card, playerId?: string) {
       card.value === topCard.value
     );
   }
+
+  return canPlayNormalTurnCard(room, card);
+}
+
+function canPlayNormalTurnCard(room: GameRoom, card: Card) {
+  const topCard = getTopCard(room);
+
+  if (!topCard) return true;
 
   if (room.pendingDraw > 0) {
     return card.value === "2" || card.value === "JOKER";
@@ -330,18 +385,86 @@ export function canPlayCard(room: GameRoom, card: Card, playerId?: string) {
 }
 
 function hasPlayableCard(room: GameRoom, playerId: string) {
+  if (!isRoundPlayer(room, playerId) || isFinishedPlayer(room, playerId)) {
+    return false;
+  }
+
   const hand = room.hands[playerId] ?? [];
 
   return hand.some((card) => canPlayCard(room, card, playerId));
 }
 
+function isForcedExtraCardState(room: GameRoom) {
+  return (
+    room.turnState === "must_play" ||
+    (room.turnState === "seven_chain" && Boolean(room.sevenStopAfterNext))
+  );
+}
+
+function canDrawNow(room: GameRoom, playerId: string) {
+  if (!isRoundPlayer(room, playerId) || isFinishedPlayer(room, playerId)) {
+    return false;
+  }
+
+  if (room.turnState === "normal") return true;
+  if (!isForcedExtraCardState(room)) return false;
+
+  return !hasPlayableCard(room, playerId);
+}
+
+function canPassNow(room: GameRoom) {
+  if (room.turnState === "after_draw") return true;
+
+  return false;
+}
+
 function finishRoundIfHandEmpty(room: GameRoom, playerId: string) {
   if ((room.hands[playerId]?.length ?? 0) > 0) return false;
 
-  room.winnerId = playerId;
-  room.turnState = "finished";
+  if (!isRoundPlayer(room, playerId)) return false;
 
-  return true;
+  if (!room.finishedPlayerIds.includes(playerId)) {
+    room.finishedPlayerIds.push(playerId);
+  }
+
+  if (!room.winnerId) {
+    room.winnerId = playerId;
+  }
+
+  const remainingPlayers = getRemainingRoundPlayers(room);
+
+  if (remainingPlayers.length <= 1) {
+    const loser = remainingPlayers[0];
+
+    room.loserId = loser?.id;
+    room.turnState = "finished";
+    room.pendingDraw = 0;
+    room.chosenSuit = undefined;
+    room.sevenSuit = undefined;
+    room.sevenStopAfterNext = false;
+    room.redrawOffer = undefined;
+
+    if (loser) {
+      const loserIndex = room.players.findIndex((player) => player.id === loser.id);
+
+      if (loserIndex !== -1) {
+        room.currentPlayerIndex = loserIndex;
+      }
+    }
+
+    room.lastMessage = loser
+      ? `${getPlayerName(room, playerId)} is uit. ${loser.name} blijft als laatste over.`
+      : `${getPlayerName(room, playerId)} is uit.`;
+
+    return true;
+  }
+
+  room.lastMessage = `${getPlayerName(
+    room,
+    playerId
+  )} is uit. ${remainingPlayers.length} spelers gaan door.`;
+
+  return false;
 }
 
 function penalizePestCardFinish(
@@ -389,7 +512,7 @@ export function playCard(
     throw new Error("Game is nog niet gestart");
   }
 
-  if (room.winnerId) {
+  if (room.turnState === "finished") {
     throw new Error("Game is al klaar");
   }
 
@@ -424,6 +547,7 @@ export function playCard(
   const wasSevenChain = room.turnState === "seven_chain";
   const wasSevenStopAfterNext = Boolean(room.sevenStopAfterNext);
   const wasSevenSameValueFinish = isSevenSameValueFinish(room, playerId, card);
+  const wasMustPlayTurn = room.turnState === "must_play";
 
   hand.splice(cardIndex, 1);
   room.discardPile.push(card);
@@ -434,6 +558,15 @@ export function playCard(
 
   if (hand.length === 0 && isPestCard(card)) {
     penalizePestCardFinish(room, playerId, effect.steps);
+    return;
+  }
+
+  if (wasMustPlayTurn && card.value === "K") {
+    room.turnState = "normal";
+
+    if (finishRoundIfHandEmpty(room, playerId)) return;
+
+    moveSteps(room, effect.steps);
     return;
   }
 
@@ -474,11 +607,7 @@ export function playCard(
     return;
   }
 
-  if (hand.length === 0) {
-    room.winnerId = playerId;
-    room.turnState = "finished";
-    return;
-  }
+  if (finishRoundIfHandEmpty(room, playerId)) return;
 
   room.turnState = "normal";
   moveSteps(room, effect.steps);
@@ -577,21 +706,11 @@ function resolveSevenChainAfterCard(
   }
 
   if (card.value === "K") {
-    if (!hasPlayableCard(room, playerId)) {
-      penalizeFailedSevenContinuation(
-        room,
-        playerId,
-        `${getPlayerName(
-          room,
-          playerId
-        )} eindigde de 7-reeks met een Heer maar kon niet nog een kaart leggen en pakt 1 strafkaart.`
-      );
-      return;
-    }
-
     room.turnState = "seven_chain";
     room.sevenStopAfterNext = true;
-    room.lastMessage = "Heer in 7-reeks: leg nog precies een kaart.";
+    room.lastMessage = hasPlayableCard(room, playerId)
+      ? "Heer in 7-reeks: leg nog precies een kaart."
+      : "Heer in 7-reeks: geen vervolgkaart, pak 1 kaart.";
     return;
   }
 
@@ -662,15 +781,12 @@ function resolveSevenChainAfterCard(
 
 function resolveMustPlayAfterKing(room: GameRoom, playerId: string) {
   if (!hasPlayableCard(room, playerId)) {
-    drawAmountToPlayer(room, playerId, 1);
-
     room.lastMessage = `${getPlayerName(
       room,
       playerId
-    )} legde een Heer maar kon niet nog een kaart leggen en pakt 1 strafkaart.`;
+    )} legde een Heer maar heeft geen vervolgkaart. Pak 1 kaart.`;
 
-    room.turnState = "normal";
-    moveToNextPlayer(room);
+    room.turnState = "must_play";
     return;
   }
 
@@ -682,7 +798,7 @@ export function drawCards(room: GameRoom, playerId: string) {
     throw new Error("Game is nog niet gestart");
   }
 
-  if (room.winnerId) {
+  if (room.turnState === "finished") {
     throw new Error("Game is al klaar");
   }
 
@@ -696,7 +812,7 @@ export function drawCards(room: GameRoom, playerId: string) {
     throw new Error("Je hebt al gepakt. Je mag nu leggen of passen.");
   }
 
-  if (room.turnState === "must_play" || room.turnState === "seven_chain") {
+  if (!canDrawNow(room, playerId)) {
     throw new Error("Je moet nu een kaart leggen.");
   }
 
@@ -737,7 +853,7 @@ export function drawCards(room: GameRoom, playerId: string) {
     room.lastMessage = `${getPlayerName(
       room,
       playerId
-    )} pakte 1 kaart maar kan niks leggen. Nieuwe pakkaart mogelijk.`;
+    )} pakte 1 kaart maar kan geen kaart leggen. Nieuwe pakkaart mogelijk.`;
 
     return;
   }
@@ -749,8 +865,11 @@ export function drawCards(room: GameRoom, playerId: string) {
       ? `${getPlayerName(
           room,
           playerId
-        )} pakte ${amount} kaarten maar kan niks leggen.`
-      : `${getPlayerName(room, playerId)} pakte 1 kaart maar kan niks leggen.`;
+        )} pakte ${amount} kaarten maar kan geen kaart leggen.`
+      : `${getPlayerName(
+          room,
+          playerId
+        )} pakte 1 kaart maar kan geen kaart leggen.`;
 
   moveToNextPlayer(room);
 }
@@ -760,7 +879,7 @@ export function passTurn(room: GameRoom, playerId: string) {
     throw new Error("Game is nog niet gestart");
   }
 
-  if (room.winnerId) {
+  if (room.turnState === "finished") {
     throw new Error("Game is al klaar");
   }
 
@@ -770,7 +889,7 @@ export function passTurn(room: GameRoom, playerId: string) {
     throw new Error("Je bent niet aan de beurt");
   }
 
-  if (room.turnState !== "after_draw") {
+  if (!canPassNow(room)) {
     throw new Error("Je mag alleen passen nadat je hebt gepakt.");
   }
 
@@ -788,7 +907,7 @@ export function redrawDrawnCard(room: GameRoom, playerId: string) {
     throw new Error("Game is nog niet gestart");
   }
 
-  if (room.winnerId) {
+  if (room.turnState === "finished") {
     throw new Error("Game is al klaar");
   }
 
@@ -973,8 +1092,20 @@ export function moveToNextPlayer(room: GameRoom) {
 
   if (totalPlayers === 0) return;
 
-  room.currentPlayerIndex =
-    (room.currentPlayerIndex + room.direction + totalPlayers) % totalPlayers;
+  if (!room.started || room.turnState === "finished") {
+    room.currentPlayerIndex =
+      (room.currentPlayerIndex + room.direction + totalPlayers) % totalPlayers;
+    return;
+  }
+
+  for (let attempt = 0; attempt < totalPlayers; attempt++) {
+    room.currentPlayerIndex =
+      (room.currentPlayerIndex + room.direction + totalPlayers) % totalPlayers;
+
+    const currentPlayer = room.players[room.currentPlayerIndex];
+
+    if (currentPlayer && isActiveTurnPlayer(room, currentPlayer)) return;
+  }
 }
 
 export function clampCurrentPlayerIndex(room: GameRoom) {
@@ -986,22 +1117,47 @@ export function clampCurrentPlayerIndex(room: GameRoom) {
   if (room.currentPlayerIndex >= room.players.length) {
     room.currentPlayerIndex = 0;
   }
+
+  if (!room.started || room.turnState === "finished") return;
+
+  const currentPlayer = room.players[room.currentPlayerIndex];
+
+  if (currentPlayer && isActiveTurnPlayer(room, currentPlayer)) return;
+
+  const nextActiveIndex = room.players.findIndex((player) =>
+    isActiveTurnPlayer(room, player)
+  );
+
+  if (nextActiveIndex !== -1) {
+    room.currentPlayerIndex = nextActiveIndex;
+  }
 }
 
 export function getPublicRoomState(room: GameRoom, playerId: string) {
-  const currentPlayerId = getCurrentPlayer(room)?.id;
+  const currentPlayerId =
+    room.turnState === "finished" ? undefined : getCurrentPlayer(room)?.id;
   const isCurrentPlayer = currentPlayerId === playerId;
+  const roundFinished = room.turnState === "finished";
 
   return {
     code: room.code,
     hostId: room.hostId,
-    players: room.players.map((player) => ({
-      id: player.id,
-      name: player.name,
-      connected: player.connected,
-      ready: player.ready,
-      cardCount: room.hands[player.id]?.length ?? 0,
-    })),
+    players: room.players.map((player) => {
+      const inRound = isRoundPlayer(room, player.id);
+      const finished = isFinishedPlayer(room, player.id);
+
+      return {
+        id: player.id,
+        name: player.name,
+        connected: player.connected,
+        ready: player.ready,
+        cardCount: room.hands[player.id]?.length ?? 0,
+        inRound,
+        finished,
+        waitingForNextRound: room.started && !inRound,
+        rank: finished ? room.finishedPlayerIds.indexOf(player.id) + 1 : undefined,
+      };
+    }),
     started: room.started,
     roundId: room.roundId,
 
@@ -1018,22 +1174,24 @@ export function getPublicRoomState(room: GameRoom, playerId: string) {
     sevenStopAfterNext: room.sevenStopAfterNext,
     canRedrawDrawnCard:
       isCurrentPlayer &&
-      !room.winnerId &&
+      !roundFinished &&
       room.turnState === "after_draw" &&
       room.redrawOffer?.playerId === playerId,
     redrawCostGems,
 
     canDraw:
       isCurrentPlayer &&
-      !room.winnerId &&
-      room.turnState === "normal",
+      !roundFinished &&
+      canDrawNow(room, playerId),
 
     canPass:
       isCurrentPlayer &&
-      !room.winnerId &&
-      room.turnState === "after_draw",
+      !roundFinished &&
+      canPassNow(room),
 
     winnerId: room.winnerId,
+    loserId: room.loserId,
+    finishedPlayerIds: room.finishedPlayerIds,
     lastMessage: room.lastMessage,
 
     rematchVotes: room.rematchVotes,

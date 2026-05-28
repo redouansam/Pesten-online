@@ -37,6 +37,7 @@ const io = new Server(server, {
 const rooms = new Map<string, GameRoom>();
 const socketToRoom = new Map<string, string>();
 const socketToPlayerId = new Map<string, string>();
+const disconnectSkipTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 const validSuits: Suit[] = ["hearts", "diamonds", "clubs", "spades"];
 
@@ -118,7 +119,7 @@ function clearForcedTurnState(room: GameRoom, message?: string) {
 }
 
 function skipDisconnectedCurrentPlayer(room: GameRoom) {
-  if (!room.started || room.winnerId) return;
+  if (!room.started || room.turnState === "finished") return;
 
   let attempts = 0;
 
@@ -154,6 +155,71 @@ function scheduleRoomCleanup(roomCode: string) {
   }, 10 * 60 * 1000);
 }
 
+function clearDisconnectSkip(playerId: string) {
+  const timer = disconnectSkipTimers.get(playerId);
+
+  if (!timer) return;
+
+  clearTimeout(timer);
+  disconnectSkipTimers.delete(playerId);
+}
+
+function scheduleDisconnectSkip(roomCode: string, playerId: string) {
+  clearDisconnectSkip(playerId);
+
+  const timer = setTimeout(() => {
+    disconnectSkipTimers.delete(playerId);
+
+    const room = rooms.get(roomCode);
+
+    if (!room || !room.started || room.turnState === "finished") return;
+
+    const player = room.players.find((item) => item.id === playerId);
+
+    if (!player || player.connected) return;
+
+    const currentPlayer = getCurrentPlayer(room);
+
+    if (currentPlayer?.id !== playerId) return;
+
+    clearForcedTurnState(
+      room,
+      `${player.name} is offline; de beurt gaat door.`
+    );
+    moveToNextPlayer(room);
+    sendRoomUpdate(roomCode);
+  }, 15 * 1000);
+
+  disconnectSkipTimers.set(playerId, timer);
+}
+
+function finishRoundIfOnePlayerLeft(room: GameRoom) {
+  if (!room.started || room.turnState === "finished") return false;
+
+  const remainingPlayers = room.players.filter(
+    (player) =>
+      room.roundPlayerIds.includes(player.id) &&
+      !room.finishedPlayerIds.includes(player.id)
+  );
+
+  if (remainingPlayers.length > 1) return false;
+
+  const loser = remainingPlayers[0];
+
+  room.loserId = loser?.id;
+  room.turnState = "finished";
+  room.pendingDraw = 0;
+  room.chosenSuit = undefined;
+  room.sevenSuit = undefined;
+  room.sevenStopAfterNext = false;
+  room.redrawOffer = undefined;
+  room.lastMessage = loser
+    ? `${loser.name} blijft als laatste over.`
+    : "De ronde is klaar.";
+
+  return true;
+}
+
 function removePlayerFromRoom(roomCode: string, playerId: string) {
   const room = rooms.get(roomCode);
 
@@ -164,8 +230,19 @@ function removePlayerFromRoom(roomCode: string, playerId: string) {
   const leavingWasCurrentPlayer = currentPlayerBeforeLeave?.id === playerId;
 
   room.players = room.players.filter((player) => player.id !== playerId);
+  clearDisconnectSkip(playerId);
   delete room.hands[playerId];
   delete room.rematchVotes[playerId];
+  room.roundPlayerIds = room.roundPlayerIds.filter((id) => id !== playerId);
+  room.finishedPlayerIds = room.finishedPlayerIds.filter((id) => id !== playerId);
+
+  if (room.winnerId === playerId) {
+    room.winnerId = room.finishedPlayerIds[0];
+  }
+
+  if (room.loserId === playerId) {
+    room.loserId = undefined;
+  }
 
   if (room.players.length === 0) {
     rooms.delete(roomCode);
@@ -190,9 +267,13 @@ function removePlayerFromRoom(roomCode: string, playerId: string) {
     );
 
   assignNewHostIfNeeded(room);
-  skipDisconnectedCurrentPlayer(room);
+  const finishedRound = finishRoundIfOnePlayerLeft(room);
 
-  if (!clearedForcedTurn) {
+  if (!finishedRound) {
+    skipDisconnectedCurrentPlayer(room);
+  }
+
+  if (!clearedForcedTurn && !finishedRound) {
     room.lastMessage = `${leavingPlayer?.name ?? "Een speler"} heeft de kamer verlaten.`;
   }
 
@@ -245,11 +326,6 @@ io.on("connection", (socket) => {
       return;
     }
 
-    if (room.started) {
-      socket.emit("error_message", "Deze game is al gestart");
-      return;
-    }
-
     if (room.players.length >= 4) {
       socket.emit("error_message", "Deze kamer zit vol");
       return;
@@ -264,6 +340,10 @@ io.on("connection", (socket) => {
     socket.join(roomCode);
 
     console.log(`${playerName} joined kamer ${roomCode}`);
+
+    if (room.started && room.turnState !== "finished") {
+      room.lastMessage = `${playerName} kijkt mee en doet de volgende ronde mee.`;
+    }
 
     socket.emit("room_joined", {
       code: roomCode,
@@ -314,6 +394,7 @@ io.on("connection", (socket) => {
 
       player.socketId = socket.id;
       player.connected = true;
+      clearDisconnectSkip(player.id);
 
       socketToRoom.set(socket.id, roomCode);
       socketToPlayerId.set(socket.id, player.id);
@@ -534,7 +615,7 @@ io.on("connection", (socket) => {
 
     if (!room) return;
 
-    if (!room.winnerId) return;
+    if (room.turnState !== "finished") return;
 
     room.rematchVotes[playerId] = wantsAgain;
 
@@ -590,6 +671,12 @@ io.on("connection", (socket) => {
 
     const player = room.players.find((item) => item.id === playerId);
 
+    if (player && player.socketId !== socket.id) {
+      socketToRoom.delete(socket.id);
+      socketToPlayerId.delete(socket.id);
+      return;
+    }
+
     if (player) {
       player.connected = false;
       player.ready = false;
@@ -601,7 +688,7 @@ io.on("connection", (socket) => {
     socketToPlayerId.delete(socket.id);
 
     assignNewHostIfNeeded(room);
-    skipDisconnectedCurrentPlayer(room);
+    scheduleDisconnectSkip(roomCode, playerId);
     scheduleRoomCleanup(roomCode);
 
     console.log("Speler weg:", socket.id);

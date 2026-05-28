@@ -3,12 +3,22 @@ export type Wallet = {
   gems: number;
   xp: number;
   premiumPass: boolean;
+  selectedAvatarId: string;
+  ownedAvatarIds: string[];
+  selectedAvatarFrameId: string;
+  ownedAvatarFrameIds: string[];
   selectedCardBackId: string;
   ownedCardBackIds: string[];
   selectedTableSkinId: string;
   ownedTableSkinIds: string[];
   gamesPlayed: number;
   wins: number;
+  pestCardsPlayed: number;
+  dailyMissionDate?: string;
+  dailyMissionClaims: string[];
+  dailyGamesPlayed: number;
+  dailyWins: number;
+  dailyPestCardsPlayed: number;
   winStreak: number;
   bestWinStreak: number;
   claimedMilestoneRewards: string[];
@@ -25,7 +35,9 @@ export type SeasonReward = {
   description: string;
   premium?: boolean;
   coins?: number;
+  avatarFrameId?: string;
   cardBackId?: string;
+  tableSkinId?: string;
 };
 
 export type MilestoneReward = {
@@ -36,6 +48,17 @@ export type MilestoneReward = {
   target: number;
   coins?: number;
   gems?: number;
+};
+
+export type DailyMission = {
+  id: string;
+  title: string;
+  description: string;
+  metric: "dailyGamesPlayed" | "dailyWins" | "dailyPestCardsPlayed";
+  target: number;
+  coins?: number;
+  gems?: number;
+  xp?: number;
 };
 
 export const MATCH_ENTRY_COINS = 10;
@@ -55,12 +78,21 @@ export const defaultWallet: Wallet = {
   gems: 25,
   xp: 0,
   premiumPass: false,
+  selectedAvatarId: "initial",
+  ownedAvatarIds: ["initial"],
+  selectedAvatarFrameId: "plain",
+  ownedAvatarFrameIds: ["plain"],
   selectedCardBackId: "classic-blue",
   ownedCardBackIds: ["classic-blue"],
   selectedTableSkinId: "royal-green",
   ownedTableSkinIds: ["royal-green"],
   gamesPlayed: 0,
   wins: 0,
+  pestCardsPlayed: 0,
+  dailyMissionClaims: [],
+  dailyGamesPlayed: 0,
+  dailyWins: 0,
+  dailyPestCardsPlayed: 0,
   winStreak: 0,
   bestWinStreak: 0,
   claimedMilestoneRewards: [],
@@ -88,7 +120,7 @@ export const seasonRewards: SeasonReward[] = [
     level: 10,
     title: "Gouden avatar frame",
     description: "Premium cosmetic.",
-    premium: true,
+    avatarFrameId: "gold",
   },
   {
     id: "level-20-premium-table",
@@ -96,6 +128,37 @@ export const seasonRewards: SeasonReward[] = [
     title: "Premium tafel",
     description: "Royal Table skin.",
     premium: true,
+    tableSkinId: "midnight-premium",
+  },
+];
+
+export const dailyMissions: DailyMission[] = [
+  {
+    id: "play-1",
+    title: "Speel 1 potje",
+    description: "Rond vandaag 1 tafel af.",
+    metric: "dailyGamesPlayed",
+    target: 1,
+    coins: 25,
+    xp: 25,
+  },
+  {
+    id: "win-1",
+    title: "Win 1 potje",
+    description: "Pak vandaag een overwinning.",
+    metric: "dailyWins",
+    target: 1,
+    gems: 3,
+    xp: 35,
+  },
+  {
+    id: "pest-3",
+    title: "Speel 3 pestkaarten",
+    description: "Gebruik 2, 7, 8, J, K, A of Joker.",
+    metric: "dailyPestCardsPlayed",
+    target: 3,
+    coins: 40,
+    xp: 30,
   },
 ];
 
@@ -143,6 +206,13 @@ export function getMilestoneProgress(
   if (reward.metric === "cardBacks") return wallet.ownedCardBackIds.length;
 
   return wallet.bestWinStreak;
+}
+
+export function getDailyMissionProgress(wallet: Wallet, mission: DailyMission) {
+  if (mission.metric === "dailyGamesPlayed") return wallet.dailyGamesPlayed;
+  if (mission.metric === "dailyWins") return wallet.dailyWins;
+
+  return wallet.dailyPestCardsPlayed;
 }
 
 export function getSeasonLevel(xp: number) {

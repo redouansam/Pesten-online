@@ -1,32 +1,64 @@
 import * as Haptics from "expo-haptics";
-import { useEffect, useState } from "react";
+import { LinearGradient } from "expo-linear-gradient";
+import { useEffect, useMemo, useState } from "react";
 import {
   Image,
+  ImageSourcePropType,
   Keyboard,
   KeyboardAvoidingView,
   Modal,
+  PanResponder,
   Platform,
   Pressable,
   ScrollView,
   Text,
   TextInput,
   View,
+  useWindowDimensions,
 } from "react-native";
 
 import {
+  BottomNav,
+  GameButton,
+  GameModalFrame,
+  GameModeCard,
+  PlayerHeader,
+  SectionHeader,
+  SurfaceCard,
+} from "./GameChrome";
+import type { BottomNavKey } from "./GameChrome";
+import {
   COINS_PER_GEM_PACK,
   DAILY_GEMS,
+  DailyMission,
   GEM_PACK_COST,
   MilestoneReward,
   Wallet,
+  dailyMissions,
+  getDailyMissionProgress,
   getMilestoneProgress,
   milestoneRewards,
   seasonRewards,
 } from "../economy";
 import { cardBackOptions } from "../cardBackImages";
 import type { CardBackOption } from "../cardBackImages";
+import {
+  avatarFrameOptions,
+  avatarOptions,
+  getAvatarFrameOption,
+  getAvatarOption,
+} from "../cosmetics";
+import type { AvatarFrameOption, AvatarOption } from "../cosmetics";
 import { coinImage, gemImage } from "../currencyImages";
 import type { ConnectionState } from "../hooks/useRoomSocket";
+import {
+  matchmakingPreview,
+  platformFeatureCards,
+  previewFriends,
+  publicRoomPreviews,
+  socialActions,
+  type PlatformFeatureKey,
+} from "../platformFeatures";
 import type {
   AppSettings,
   CardSizeSetting,
@@ -52,6 +84,159 @@ type ShopTab =
   | "frames"
   | "season";
 type CardBackFilter = "all" | "buyable" | "owned" | "locked";
+type ShopPreview =
+  | {
+      kind: "cardback";
+      item: CardBackOption;
+    }
+  | {
+      kind: "table";
+      item: TableSkinOption;
+    }
+  | {
+      kind: "avatar";
+      item: AvatarOption;
+    }
+  | {
+      kind: "frame";
+      item: AvatarFrameOption;
+    };
+
+type RuleSection = {
+  title: string;
+  intro: string;
+  rules: Array<{
+    label: string;
+    title: string;
+    text: string;
+  }>;
+};
+
+const shopTabs: Array<{ key: ShopTab; label: string }> = [
+  { key: "wallet", label: "Munten" },
+  { key: "cardbacks", label: "Backs" },
+  { key: "tables", label: "Tafels" },
+  { key: "avatars", label: "Avatars" },
+  { key: "frames", label: "Frames" },
+  { key: "season", label: "Season" },
+];
+
+const pestenRuleSections: RuleSection[] = [
+  {
+    title: "Basis",
+    intro: "Leg alleen kaarten die passen bij de situatie op tafel.",
+    rules: [
+      {
+        label: "Leg",
+        title: "Geldige kaart",
+        text: "Een kaart mag alleen gelegd worden als kleur/symbool, waarde of het actieve gekozen symbool klopt.",
+      },
+      {
+        label: "Boer",
+        title: "Gekozen symbool is leidend",
+        text: "Na een Boer telt het gekozen symbool. Het symbool dat op de Boer staat is dan niet leidend.",
+      },
+      {
+        label: "Pak",
+        title: "Geen geldige kaart",
+        text: "Als je geen geldige kaart hebt, pak je volgens de bestaande gameflow en kun je daarna spelen of passen als dat mag.",
+      },
+      {
+        label: "Stapel",
+        title: "Trekstapel leeg",
+        text: "Als de trekstapel leeg is, wordt de aflegstapel geschud en speel je gewoon door.",
+      },
+    ],
+  },
+  {
+    title: "Straf Stapelen",
+    intro: "Pakstraffen blijven actief tot iemand de straf pakt.",
+    rules: [
+      {
+        label: "2",
+        title: "Pak 2",
+        text: "De volgende speler pakt 2 kaarten, tenzij die speler stapelt met een 2 of Joker.",
+      },
+      {
+        label: "Joker",
+        title: "Pak 5",
+        text: "De volgende speler pakt 5 kaarten. Ook Joker mag gestapeld worden met 2 of Joker.",
+      },
+      {
+        label: "+",
+        title: "Straf telt op",
+        text: "Bij stapelen telt de straf op. Een 2 en Joker samen maken dus een hogere pakstraf.",
+      },
+      {
+        label: "Na pak",
+        title: "Daarna verder",
+        text: "Na het pakken van strafkaarten mag de speler daarna verder volgens de actieve regel en symboolsituatie.",
+      },
+    ],
+  },
+  {
+    title: "Speciale Kaarten",
+    intro: "Pestkaarten veranderen beurt, richting of wat je hierna moet doen.",
+    rules: [
+      {
+        label: "7",
+        title: "Alles geven",
+        text: "Na een 7 mag je doorgaan met kaarten van hetzelfde symbool. Je mag niet zomaar elke kaart leggen.",
+      },
+      {
+        label: "7",
+        title: "7-reeks beperken",
+        text: "Bij een 7-reeks mag alleen hetzelfde symbool of een geldige vervolgkaart volgens de regel. Een verkeerde kaart stopt niet zomaar de reeks.",
+      },
+      {
+        label: "8",
+        title: "Slaan",
+        text: "De volgende speler wordt overgeslagen.",
+      },
+      {
+        label: "J",
+        title: "Boer kiest symbool",
+        text: "De speler kiest een nieuw symbool. Dat gekozen symbool bepaalt wat hierna geldig is.",
+      },
+      {
+        label: "K",
+        title: "Heer extra kaart",
+        text: "Na een Heer moet je precies 1 extra kaart leggen.",
+      },
+      {
+        label: "K",
+        title: "Geen extra kaart",
+        text: "Kun je na een Heer geen extra kaart leggen, dan moet je 1 kaart pakken.",
+      },
+      {
+        label: "A",
+        title: "Aas draait",
+        text: "De speelrichting draait om.",
+      },
+    ],
+  },
+  {
+    title: "Eindigen",
+    intro: "Uitgaan mag, maar niet met een pestkaart.",
+    rules: [
+      {
+        label: "Pest",
+        title: "Niet eindigen met pest",
+        text: "Je mag niet eindigen met een pestkaart.",
+      },
+      {
+        label: "A 2 7 8 J K",
+        title: "Pestkaarten",
+        text: "Pestkaarten zijn minimaal Aas, 2, 7, 8, Boer/Jack, Heer/King en Joker.",
+      },
+      {
+        label: "Uit",
+        title: "Straf bij verkeerd uitgaan",
+        text: "Als je probeert te eindigen met een pestkaart, moet je strafkaarten pakken volgens onze game-regel.",
+      },
+    ],
+  },
+];
 
 export function LobbyScreen({
   name,
@@ -83,6 +268,11 @@ export function LobbyScreen({
   selectCardBack,
   buyTableSkin,
   selectTableSkin,
+  buyAvatar,
+  selectAvatar,
+  buyAvatarFrame,
+  selectAvatarFrame,
+  claimDailyMission,
   claimSeasonReward,
   claimMilestoneReward,
 }: {
@@ -115,13 +305,27 @@ export function LobbyScreen({
   selectCardBack: (cardBackId: string) => void;
   buyTableSkin: (tableSkinId: string) => void;
   selectTableSkin: (tableSkinId: string) => void;
+  buyAvatar: (avatarId: string) => void;
+  selectAvatar: (avatarId: string) => void;
+  buyAvatarFrame: (frameId: string) => void;
+  selectAvatarFrame: (frameId: string) => void;
+  claimDailyMission: (missionId: string) => void;
   claimSeasonReward: (rewardId: string) => void;
   claimMilestoneReward: (rewardId: string) => void;
 }) {
+  const { width: screenWidth } = useWindowDimensions();
+  const compactHome = screenWidth < 380;
+  const [activeTab, setActiveTab] = useState<BottomNavKey>("play");
   const [showShop, setShowShop] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showRules, setShowRules] = useState(false);
+  const [showSocial, setShowSocial] = useState(false);
+  const [showMatchmaking, setShowMatchmaking] = useState(false);
   const [draftName, setDraftName] = useState(name);
+  const [draftSettings, setDraftSettings] = useState<AppSettings>(settings);
+  const [settingsSavedMessage, setSettingsSavedMessage] = useState<string | null>(
+    null
+  );
 
   const normalizedRoomCode = roomCodeInput
     .trim()
@@ -137,19 +341,41 @@ export function LobbyScreen({
   const selectedCardBack =
     cardBackOptions.find((cardBack) => cardBack.id === wallet.selectedCardBackId) ??
     cardBackOptions[0];
-  const winRate =
-    wallet.gamesPlayed > 0
-      ? Math.round((wallet.wins / wallet.gamesPlayed) * 100)
-      : 0;
+  const selectedTableSkin =
+    tableSkinOptions.find((tableSkin) => tableSkin.id === wallet.selectedTableSkinId) ??
+    tableSkinOptions[0];
+  const selectedAvatar = getAvatarOption(wallet.selectedAvatarId);
+  const selectedAvatarFrame = getAvatarFrameOption(wallet.selectedAvatarFrameId);
+  const displayName = profileReady ? name : "Nieuwe speler";
+  const avatarLabel =
+    selectedAvatar.badge || name.slice(0, 1).toUpperCase() || "P";
 
   useEffect(() => {
     setDraftName(name);
   }, [name]);
 
+  useEffect(() => {
+    setDraftSettings(settings);
+  }, [settings]);
+
+  useEffect(() => {
+    if (!settingsSavedMessage) return;
+
+    const timer = setTimeout(() => setSettingsSavedMessage(null), 2200);
+
+    return () => clearTimeout(timer);
+  }, [settingsSavedMessage]);
+
   function runLightHaptic() {
     if (!settings.hapticsEnabled) return;
 
     Haptics.selectionAsync().catch(() => {});
+  }
+
+  function goToTab(tab: BottomNavKey) {
+    Keyboard.dismiss();
+    if (activeTab !== tab) runLightHaptic();
+    setActiveTab(tab);
   }
 
   function saveProfileName() {
@@ -159,21 +385,65 @@ export function LobbyScreen({
     Keyboard.dismiss();
     setName(draftName);
     setShowSettings(false);
+    setActiveTab("play");
+  }
+
+  function updateDraftSettings(patch: Partial<AppSettings>) {
+    setSettingsSavedMessage(null);
+    setDraftSettings((currentSettings) => ({
+      ...currentSettings,
+      ...patch,
+    }));
+  }
+
+  function saveProfileSettings() {
+    if (!draftNameReady) return;
+
+    runLightHaptic();
+    Keyboard.dismiss();
+    setName(draftName);
+    updateSettings(draftSettings);
+    setSettingsSavedMessage("Opgeslagen");
   }
 
   function openShop() {
-    runLightHaptic();
-    setShowShop(true);
+    goToTab("shop");
   }
 
   function openSettings() {
-    runLightHaptic();
-    setShowSettings(true);
+    goToTab("profile");
   }
 
   function openRules() {
-    runLightHaptic();
-    setShowRules(true);
+    goToTab("rules");
+  }
+
+  function openSocial() {
+    goToTab("social");
+  }
+
+  function openMatchmaking() {
+    goToTab("social");
+    setShowMatchmaking(true);
+  }
+
+  function openFriendsPreview() {
+    goToTab("social");
+    setShowSocial(true);
+  }
+
+  function handlePlatformFeaturePress(feature: PlatformFeatureKey) {
+    if (feature === "matchmaking" || feature === "publicRooms") {
+      openMatchmaking();
+      return;
+    }
+
+    if (feature === "profiles") {
+      goToTab("profile");
+      return;
+    }
+
+    openFriendsPreview();
   }
 
   function claimDailyRewardFromHome() {
@@ -183,49 +453,118 @@ export function LobbyScreen({
     claimDailyGems();
   }
 
+  function createRoomFromHome() {
+    Keyboard.dismiss();
+    if (playDisabled) return;
+
+    createRoom();
+  }
+
+  function joinRoomFromHome() {
+    Keyboard.dismiss();
+    if (!connected || !roomCodeReady || isBusy || !profileReady) return;
+
+    joinRoom();
+  }
+
+  const activeMission =
+    dailyMissions.find((mission) => {
+      const progress = getDailyMissionProgress(wallet, mission);
+      return (
+        progress >= mission.target &&
+        !wallet.dailyMissionClaims.includes(mission.id)
+      );
+    }) ??
+    dailyMissions.find(
+      (mission) => !wallet.dailyMissionClaims.includes(mission.id)
+    );
+  const activeMissionProgress = activeMission
+    ? getDailyMissionProgress(wallet, activeMission)
+    : 0;
+  const activeMissionPercent = activeMission
+    ? Math.min(
+        100,
+        Math.round((activeMissionProgress / activeMission.target) * 100)
+      )
+    : 100;
+  const activeMissionReady =
+    !!activeMission &&
+    activeMissionProgress >= activeMission.target &&
+    !wallet.dailyMissionClaims.includes(activeMission.id);
+  const homeFeatureCards = platformFeatureCards.filter((feature) =>
+    ["matchmaking", "publicRooms", "friends"].includes(feature.key)
+  );
+  const tabOrder: BottomNavKey[] = ["play", "social", "shop", "rules", "profile"];
+  const tabSwipeResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: (_, gesture) =>
+          Math.abs(gesture.dx) > 28 && Math.abs(gesture.dy) < 24,
+        onPanResponderRelease: (_, gesture) => {
+          const index = tabOrder.indexOf(activeTab);
+          if (gesture.dx < -52) {
+            const nextTab = tabOrder[Math.min(tabOrder.length - 1, index + 1)];
+            if (nextTab) goToTab(nextTab);
+          }
+          if (gesture.dx > 52) {
+            const nextTab = tabOrder[Math.max(0, index - 1)];
+            if (nextTab) goToTab(nextTab);
+          }
+        },
+      }),
+    [activeTab, settings.hapticsEnabled]
+  );
+
   const lobbyContent = (
-    <ScrollView
-      contentContainerStyle={styles.homeScroll}
-      keyboardShouldPersistTaps="handled"
-      onScrollBeginDrag={Keyboard.dismiss}
-      showsVerticalScrollIndicator={false}
-    >
-      <View style={styles.homeCard}>
-        <View style={styles.logoRow}>
-          <View style={styles.cardLogoSmall}>
-            <Text style={styles.cardLogoText}>P</Text>
-            <Text style={styles.cardLogoIcon}>S</Text>
+    <View style={styles.homeShell}>
+      <ScrollView
+        contentContainerStyle={[
+          styles.homeScroll,
+          compactHome && styles.homeScrollCompact,
+        ]}
+        keyboardShouldPersistTaps="handled"
+        onScrollBeginDrag={Keyboard.dismiss}
+        showsVerticalScrollIndicator={false}
+        bounces
+      >
+      <View style={[styles.homeCard, compactHome && styles.homeCardCompact]}>
+        <PlayerHeader
+          avatarBackgroundColor={selectedAvatar.backgroundColor}
+          avatarFrameColor={selectedAvatarFrame.borderColor}
+          avatarLabel={avatarLabel}
+          avatarTextColor={selectedAvatar.textColor}
+          coins={wallet.coins}
+          gems={wallet.gems}
+          level={season.level}
+          name={displayName}
+          onCurrencyPress={openShop}
+          onProfilePress={openSettings}
+          xpPercent={season.progressPercent}
+        />
+
+        <View style={[styles.gameBrandRow, compactHome && styles.gameBrandRowCompact]}>
+          <View>
+            <Text style={styles.gameBrandEyebrow}>Live arena</Text>
+            <Text
+              style={[
+                styles.gameBrandTitle,
+                compactHome && styles.gameBrandTitleCompact,
+              ]}
+            >
+              Pesten Online
+            </Text>
           </View>
 
-          <View style={styles.brandBadge}>
-            <Text style={styles.brandBadgeText}>LIVE TAFEL</Text>
-          </View>
-        </View>
-
-        <Text style={styles.homeTitle}>Pesten Online</Text>
-        <Text style={styles.homeSubtitle}>
-          Speel direct met vrienden met 1 code.
-        </Text>
-
-        <View style={styles.homeStatusRow}>
-          <View style={styles.connectionPill}>
+          <View style={styles.gameOnlinePill}>
             <View
               style={[
                 styles.connectionDot,
                 connected ? styles.connectionDotOn : styles.connectionDotOff,
               ]}
             />
-            <Text style={styles.connectionText}>
+            <Text style={styles.gameOnlineText}>
               {connected ? "Online" : "Offline"}
             </Text>
-          </View>
-
-          <View style={styles.walletMiniPill}>
-            <Image source={coinImage} style={styles.walletMiniIcon} />
-            <Text style={styles.walletMiniText}>{wallet.coins} coins</Text>
-            <Text style={styles.walletMiniDivider}>/</Text>
-            <Image source={gemImage} style={styles.walletMiniIcon} />
-            <Text style={styles.walletMiniText}>{wallet.gems} gems</Text>
           </View>
         </View>
 
@@ -240,11 +579,11 @@ export function LobbyScreen({
                   : "Offline"}
               </Text>
               <Text style={styles.connectionHelpText}>
-                Check je WiFi of start de server opnieuw.
+                Server wordt wakker of je verbinding herstelt. Dit kan 30-60 sec duren.
               </Text>
             </View>
             <Pressable style={styles.connectionRetryButton} onPress={retryConnection}>
-              <Text style={styles.connectionRetryText}>Retry</Text>
+              <Text style={styles.connectionRetryText}>Opnieuw</Text>
             </Pressable>
           </View>
         ) : null}
@@ -267,38 +606,13 @@ export function LobbyScreen({
           </View>
         ) : null}
 
-        {economyNotice && !showShop ? (
+        {economyNotice && activeTab !== "shop" ? (
           <Pressable style={styles.economyNotice} onPress={clearEconomyNotice}>
             <Text style={styles.economyNoticeText}>{economyNotice}</Text>
           </Pressable>
         ) : null}
 
-        {canClaimDailyGems ? (
-          <Pressable
-            style={styles.homeRewardCard}
-            onPress={claimDailyRewardFromHome}
-          >
-            <View style={styles.homeRewardIcon}>
-              <Image source={gemImage} style={styles.homeRewardGemIcon} />
-            </View>
-            <View style={styles.homeRewardCopy}>
-              <Text style={styles.homeRewardTitle}>Daily reward</Text>
-              <Text style={styles.homeRewardText}>+{DAILY_GEMS} gems</Text>
-            </View>
-            <Text style={styles.homeRewardCta}>Claim</Text>
-          </Pressable>
-        ) : null}
-
-        {profileReady ? (
-          <ProfileSummary
-            name={name}
-            wallet={wallet}
-            season={season}
-            selectedCardBack={selectedCardBack}
-            winRate={winRate}
-            openSettings={openSettings}
-          />
-        ) : (
+        {!profileReady ? (
           <ProfileSetup
             draftName={draftName}
             draftNameReady={draftNameReady}
@@ -308,132 +622,596 @@ export function LobbyScreen({
             }}
             saveProfileName={saveProfileName}
           />
+        ) : (
+          <View style={styles.homeBody} {...tabSwipeResponder.panHandlers}>
+            {activeTab === "play" ? (
+              <View style={[styles.tabPage, compactHome && styles.tabPageCompact]}>
+                <LinearGradient
+                  colors={["#10201d", "#152823", "#10201d"]}
+                  style={[
+                    styles.gameModeHero,
+                    compactHome && styles.gameModeHeroCompact,
+                  ]}
+                >
+                  <View
+                    style={[
+                      styles.gameModeHeader,
+                      compactHome && styles.gameModeHeaderCompact,
+                    ]}
+                  >
+                    <View style={styles.gameModeBadge}>
+                      <Text style={styles.gameModeBadgeText}>Vriendentafel</Text>
+                    </View>
+
+                    <View style={styles.gameEntryBadge}>
+                      <Text style={styles.gameEntryLabel}>Inzet</Text>
+                      <Text style={styles.gameEntryValue}>{entryCostCoins}</Text>
+                    </View>
+                  </View>
+
+                  <View
+                    style={[
+                      styles.gameModeBody,
+                      compactHome && styles.gameModeBodyCompact,
+                    ]}
+                  >
+                    <View
+                      style={[
+                        styles.gameArenaStage,
+                        compactHome && styles.gameArenaStageCompact,
+                      ]}
+                    >
+                      <View
+                        style={[
+                          styles.gameArenaPlate,
+                          compactHome && styles.gameArenaPlateCompact,
+                          {
+                            borderColor: "rgba(210,168,78,0.42)",
+                          },
+                        ]}
+                      >
+                        <View
+                          style={[
+                            styles.gameTableSkinPreview,
+                            compactHome && styles.gameTableSkinPreviewCompact,
+                            {
+                              borderColor: "rgba(210,168,78,0.38)",
+                            },
+                          ]}
+                        >
+                          <View
+                            style={[
+                              styles.gameTableSkinRail,
+                              compactHome && styles.gameTableSkinRailCompact,
+                              {
+                                backgroundColor: selectedTableSkin.railColors[0],
+                                borderColor: "rgba(210,168,78,0.34)",
+                              },
+                            ]}
+                          />
+                          <View
+                            style={[
+                              styles.gameTableSkinFelt,
+                              compactHome && styles.gameTableSkinFeltCompact,
+                              {
+                                backgroundColor: selectedTableSkin.feltColors[0],
+                                borderColor: "rgba(247,243,236,0.18)",
+                              },
+                            ]}
+                          />
+                        </View>
+
+                        <View
+                          style={[
+                            styles.gameDeckStack,
+                            styles.gameDeckStackLeft,
+                          ]}
+                        >
+                          <Image
+                            source={selectedCardBack.image}
+                            style={[
+                              styles.gameDeckPreview,
+                              styles.gameDeckPreviewBack,
+                              compactHome && styles.gameDeckPreviewCompact,
+                            ]}
+                            resizeMode="cover"
+                          />
+                          <Image
+                            source={selectedCardBack.image}
+                            style={[
+                              styles.gameDeckPreview,
+                              compactHome && styles.gameDeckPreviewCompact,
+                            ]}
+                            resizeMode="cover"
+                          />
+                        </View>
+
+                        <View style={styles.gameDeckStack}>
+                          <Image
+                            source={selectedCardBack.image}
+                            style={[
+                              styles.gameDeckPreview,
+                              styles.gameDeckPreviewBack,
+                              compactHome && styles.gameDeckPreviewCompact,
+                            ]}
+                            resizeMode="cover"
+                          />
+                          <Image
+                            source={selectedCardBack.image}
+                            style={[
+                              styles.gameDeckPreview,
+                              compactHome && styles.gameDeckPreviewCompact,
+                            ]}
+                            resizeMode="cover"
+                          />
+                        </View>
+                      </View>
+                    </View>
+
+                    <View style={styles.gameModeCopy}>
+                      <Text
+                        style={[
+                          styles.gameModeTitle,
+                          compactHome && styles.gameModeTitleCompact,
+                        ]}
+                      >
+                        Speel nu
+                      </Text>
+                      <Text
+                        style={[
+                          styles.gameModeText,
+                          compactHome && styles.gameModeTextCompact,
+                        ]}
+                        numberOfLines={2}
+                      >
+                        Maak een tafel, deel je code en speel direct met vrienden.
+                      </Text>
+                    </View>
+                  </View>
+
+                  <Pressable
+                    style={[
+                      styles.gameStartButton,
+                      compactHome && styles.gameStartButtonCompact,
+                      playDisabled && styles.disabledButton,
+                    ]}
+                    onPress={createRoomFromHome}
+                    disabled={playDisabled}
+                  >
+                    <Text style={styles.gameStartButtonText}>
+                      {creatingRoom ? "Tafel openen..." : "Nieuwe tafel"}
+                    </Text>
+                    <Text style={styles.gameStartButtonSub}>2-4 spelers</Text>
+                  </Pressable>
+                </LinearGradient>
+
+                <View
+                  style={[
+                    styles.gameJoinPanel,
+                    compactHome && styles.gameJoinPanelCompact,
+                  ]}
+                >
+                  <View style={styles.gameJoinHeader}>
+                    <Text style={styles.gameJoinTitle}>Kamercode</Text>
+                    <Text style={styles.gameJoinHint}>5 tekens</Text>
+                  </View>
+
+                  <View style={styles.gameJoinInlineRow}>
+                    <TextInput
+                      style={[
+                        styles.gameCodeInput,
+                        compactHome && styles.gameCodeInputCompact,
+                      ]}
+                      value={roomCodeInput}
+                      onChangeText={(value) => {
+                        clearError();
+                        setRoomCodeInput(
+                          value.toUpperCase().replace(/[^A-Z0-9]/g, "")
+                        );
+                      }}
+                      placeholder="ABC12"
+                      placeholderTextColor="#7f8797"
+                      autoCapitalize="characters"
+                      autoComplete="off"
+                      autoCorrect={false}
+                      maxLength={5}
+                      returnKeyType="join"
+                      blurOnSubmit
+                      onSubmitEditing={joinRoomFromHome}
+                    />
+
+                    <Pressable
+                      style={[
+                        styles.gameJoinButton,
+                        compactHome && styles.gameJoinButtonCompact,
+                        (!connected || !roomCodeReady || isBusy || !profileReady) &&
+                          styles.disabledButton,
+                      ]}
+                      onPress={joinRoomFromHome}
+                      disabled={!connected || !roomCodeReady || isBusy || !profileReady}
+                    >
+                      <Text style={styles.gameJoinButtonText}>
+                        {joiningRoom ? "..." : "Join"}
+                      </Text>
+                    </Pressable>
+                  </View>
+                </View>
+
+                <SurfaceCard
+                  subdued
+                  style={[
+                    styles.homeSection,
+                    compactHome && styles.homeSectionCompact,
+                  ]}
+                >
+                  <SectionHeader
+                    title="Online opties"
+                    subtitle="Zoeken, open tafels en vrienden blijven klaar voor later."
+                    actionLabel="Sociaal"
+                    onAction={openSocial}
+                  />
+
+                  <View style={styles.gameModeGrid}>
+                    {homeFeatureCards.map((feature) => (
+                      <GameModeCard
+                        key={feature.key}
+                        badge={feature.badge}
+                        icon={feature.icon}
+                        tone={feature.tone}
+                        onPress={() => handlePlatformFeaturePress(feature.key)}
+                        subtitle={feature.subtitle}
+                        title={feature.title}
+                      />
+                    ))}
+                  </View>
+                </SurfaceCard>
+
+                <SurfaceCard
+                  subdued
+                  style={[
+                    styles.homeSection,
+                    compactHome && styles.homeSectionCompact,
+                  ]}
+                >
+                  <SectionHeader
+                    title="Vandaag"
+                    subtitle="Beloningen en voortgang zonder drukte."
+                    actionLabel="Shop"
+                    onAction={openShop}
+                  />
+
+                  <View
+                    style={[
+                      styles.gameRewardGrid,
+                      compactHome && styles.gameRewardGridCompact,
+                    ]}
+                  >
+                    <Pressable
+                      style={[
+                        styles.gameRewardTile,
+                        !canClaimDailyGems && styles.gameRewardTileMuted,
+                      ]}
+                      onPress={claimDailyRewardFromHome}
+                      disabled={!canClaimDailyGems}
+                    >
+                      <Image source={gemImage} style={styles.gameRewardIcon} />
+                      <View style={styles.gameRewardCopy}>
+                        <Text style={styles.gameRewardTitle}>Daily</Text>
+                        <Text style={styles.gameRewardText}>
+                          {canClaimDailyGems
+                            ? `+${DAILY_GEMS} gems klaar`
+                            : "Morgen weer"}
+                        </Text>
+                      </View>
+                      {canClaimDailyGems ? (
+                        <View style={styles.gameNoticeDot}>
+                          <Text style={styles.gameNoticeDotText}>1</Text>
+                        </View>
+                      ) : null}
+                    </Pressable>
+
+                    {activeMission ? (
+                    <Pressable
+                      style={styles.gameMissionTile}
+                      onPress={() => {
+                        if (activeMissionReady) {
+                          claimDailyMission(activeMission.id);
+                        } else {
+                          openShop();
+                        }
+                      }}
+                    >
+                      <View style={styles.gameMissionTopRow}>
+                        <Text style={styles.gameMissionTitle} numberOfLines={1}>
+                          {activeMission.title}
+                        </Text>
+                        <Text style={styles.gameMissionCount}>
+                          {Math.min(activeMissionProgress, activeMission.target)}/
+                          {activeMission.target}
+                        </Text>
+                      </View>
+                      <View style={styles.gameMissionTrack}>
+                        <View
+                          style={[
+                            styles.gameMissionFill,
+                            {
+                              width: `${activeMissionPercent}%`,
+                            },
+                          ]}
+                        />
+                      </View>
+                      <Text style={styles.gameMissionReward}>
+                        {activeMissionReady ? "Claim reward" : "Missie"}
+                      </Text>
+                    </Pressable>
+                    ) : null}
+                  </View>
+                </SurfaceCard>
+              </View>
+            ) : null}
+
+            {activeTab === "social" ? (
+              <View style={styles.tabPage}>
+                <SurfaceCard subdued style={styles.tabHeroCard}>
+                  <SectionHeader
+                    title="Vrienden & online"
+                    subtitle="Voorbereid voor zoeken, open tafels en invites."
+                  />
+
+                  <Pressable
+                    style={styles.matchmakingStatusCard}
+                    onPress={openMatchmaking}
+                  >
+                    <View style={styles.matchmakingPulse} />
+                    <View style={styles.matchmakingStatusCopy}>
+                      <Text style={styles.matchmakingStatusTitle}>
+                        {matchmakingPreview.title}
+                      </Text>
+                      <Text style={styles.matchmakingStatusText}>
+                        {matchmakingPreview.region} - {matchmakingPreview.ruleset}
+                      </Text>
+                    </View>
+                    <Text style={styles.matchmakingWaitText}>
+                      {matchmakingPreview.statusLabel}
+                    </Text>
+                  </Pressable>
+                </SurfaceCard>
+
+                <SurfaceCard subdued style={styles.tabSectionCard}>
+                  <SectionHeader
+                    title="Snelle acties"
+                    subtitle="Kleine stappen, geen drukke tegels."
+                  />
+                  <View style={styles.socialActionRow}>
+                    {socialActions.map((action) => (
+                      <Pressable
+                        key={action.key}
+                        style={styles.socialActionTile}
+                        onPress={() => handlePlatformFeaturePress(action.key)}
+                      >
+                        <Text style={styles.socialActionIcon}>{action.icon}</Text>
+                        <Text style={styles.socialActionText} numberOfLines={1}>
+                          {action.label}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                </SurfaceCard>
+
+                <SurfaceCard subdued style={styles.publicRoomPreviewList}>
+                  <View style={styles.publicRoomPreviewHeader}>
+                    <Text style={styles.publicRoomPreviewTitle}>Open tafels</Text>
+                    <Text style={styles.publicRoomPreviewMeta}>Preview</Text>
+                  </View>
+
+                  {publicRoomPreviews.map((publicRoom) => (
+                    <Pressable
+                      key={publicRoom.id}
+                      style={styles.publicRoomPreviewRow}
+                      onPress={() => handlePlatformFeaturePress("publicRooms")}
+                    >
+                      <View style={styles.publicRoomIcon}>
+                        <Text style={styles.publicRoomIconText}>
+                          {publicRoom.seatsTaken}/{publicRoom.seatsTotal}
+                        </Text>
+                      </View>
+                      <View style={styles.friendPreviewCopy}>
+                        <Text style={styles.friendPreviewName}>
+                          {publicRoom.title}
+                        </Text>
+                        <Text style={styles.friendPreviewStatus}>
+                          {publicRoom.ruleset} - {publicRoom.region}
+                        </Text>
+                      </View>
+                      <View style={styles.friendPreviewButton}>
+                        <Text style={styles.friendPreviewButtonText}>
+                          {publicRoom.statusLabel}
+                        </Text>
+                      </View>
+                    </Pressable>
+                  ))}
+                </SurfaceCard>
+
+                <SurfaceCard subdued style={styles.friendPreviewList}>
+                  <View style={styles.socialProfileCard}>
+                    <View style={styles.socialProfileLevel}>
+                      <Text style={styles.socialProfileLevelText}>
+                        Lv {season.level}
+                      </Text>
+                    </View>
+                    <View style={styles.socialProfileCopy}>
+                      <Text style={styles.socialProfileName}>{displayName}</Text>
+                      <Text style={styles.socialProfileText}>
+                        Profiel preview - later klikbaar voor stats en invite.
+                      </Text>
+                    </View>
+                  </View>
+
+                  {previewFriends.map((friend) => (
+                    <View key={friend.name} style={styles.friendPreviewRow}>
+                      <View style={styles.friendPreviewAvatar}>
+                        <Text style={styles.friendPreviewAvatarText}>
+                          {friend.name.slice(0, 1)}
+                        </Text>
+                      </View>
+                      <View style={styles.friendPreviewCopy}>
+                        <Text style={styles.friendPreviewName}>{friend.name}</Text>
+                        <Text style={styles.friendPreviewStatus}>
+                          {friend.status}
+                        </Text>
+                      </View>
+                      <View style={styles.friendPreviewButton}>
+                        <Text style={styles.friendPreviewButtonText}>
+                          {friend.cta}
+                        </Text>
+                      </View>
+                    </View>
+                  ))}
+                </SurfaceCard>
+              </View>
+            ) : null}
+
+            {activeTab === "shop" ? (
+              <View style={styles.tabPage}>
+                <SurfaceCard subdued style={styles.tabHeroCard}>
+                  <SectionHeader
+                    title="Markt"
+                    subtitle="Cosmetics, rewards en valuta overzichtelijk bij elkaar."
+                  />
+                </SurfaceCard>
+
+                {economyNotice ? (
+                  <Pressable style={styles.shopNotice} onPress={clearEconomyNotice}>
+                    <Text style={styles.shopNoticeText}>{economyNotice}</Text>
+                  </Pressable>
+                ) : null}
+
+                <EconomyPanel
+                  wallet={wallet}
+                  season={season}
+                  hapticsEnabled={settings.hapticsEnabled}
+                  buyCoinsWithGems={buyCoinsWithGems}
+                  claimDailyGems={claimDailyGems}
+                  canClaimDailyGems={canClaimDailyGems}
+                  previewPremiumPass={previewPremiumPass}
+                  previewGemPurchase={previewGemPurchase}
+                  buyCardBack={buyCardBack}
+                  selectCardBack={selectCardBack}
+                  buyTableSkin={buyTableSkin}
+                  selectTableSkin={selectTableSkin}
+                  buyAvatar={buyAvatar}
+                  selectAvatar={selectAvatar}
+                  buyAvatarFrame={buyAvatarFrame}
+                  selectAvatarFrame={selectAvatarFrame}
+                  claimDailyMission={claimDailyMission}
+                  claimSeasonReward={claimSeasonReward}
+                  claimMilestoneReward={claimMilestoneReward}
+                />
+              </View>
+            ) : null}
+
+            {activeTab === "rules" ? (
+              <View style={[styles.tabPage, styles.rulesList]}>
+                <SurfaceCard subdued style={styles.tabHeroCard}>
+                  <SectionHeader
+                    title="Spelregels"
+                    subtitle="Volledige Pesten-variant, kort en scanbaar."
+                  />
+                </SurfaceCard>
+                {pestenRuleSections.map((section) => (
+                  <RuleSectionView key={section.title} section={section} />
+                ))}
+              </View>
+            ) : null}
+
+            {activeTab === "profile" ? (
+              <View style={styles.tabPage}>
+                <SurfaceCard subdued style={styles.tabHeroCard}>
+                  <SectionHeader
+                    title="Instellingen"
+                    subtitle="Naam, haptics, kaartgrootte en taal."
+                  />
+                </SurfaceCard>
+
+                <SurfaceCard subdued style={styles.profileSettingsCard}>
+                  <Text style={styles.inputLabel}>Spelersnaam</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={draftName}
+                    onChangeText={setDraftName}
+                    placeholder="Naam"
+                    placeholderTextColor="#9ca3af"
+                    autoCapitalize="words"
+                    autoCorrect={false}
+                    maxLength={18}
+                    returnKeyType="done"
+                    onSubmitEditing={saveProfileSettings}
+                  />
+
+                  <View style={styles.settingsGroup}>
+                    <SettingSwitch
+                      label="Haptics"
+                      enabled={draftSettings.hapticsEnabled}
+                      onPress={() =>
+                        updateDraftSettings({
+                          hapticsEnabled: !draftSettings.hapticsEnabled,
+                        })
+                      }
+                    />
+                    <SettingSegment<CardSizeSetting>
+                      label="Kaarten"
+                      value={draftSettings.cardSize}
+                      options={[
+                        { label: "Compact", value: "compact" },
+                        { label: "Normaal", value: "normal" },
+                        { label: "Groot", value: "large" },
+                      ]}
+                      onChange={(cardSize) => updateDraftSettings({ cardSize })}
+                    />
+                    <SettingSegment<MotionSetting>
+                      label="Animatie"
+                      value={draftSettings.motionLevel}
+                      options={[
+                        { label: "Rustig", value: "low" },
+                        { label: "Normaal", value: "normal" },
+                      ]}
+                      onChange={(motionLevel) => updateDraftSettings({ motionLevel })}
+                    />
+                    <SettingSegment<LanguageSetting>
+                      label="Taal"
+                      value={draftSettings.language}
+                      options={[
+                        { label: "NL", value: "nl" },
+                        { label: "EN", value: "en", disabled: true },
+                      ]}
+                      onChange={(language) => updateDraftSettings({ language })}
+                    />
+                  </View>
+
+                  <Text style={styles.settingHelperText}>
+                    Kaartgrootte en animatie gelden na opslaan direct in de speeltafel. Engels komt later.
+                  </Text>
+
+                  <GameButton
+                    label={settingsSavedMessage ?? "Opslaan"}
+                    onPress={saveProfileSettings}
+                    disabled={!draftNameReady}
+                  />
+                </SurfaceCard>
+              </View>
+            ) : null}
+          </View>
         )}
-
-        <View style={styles.playPanel}>
-          <View style={styles.playHeaderRow}>
-            <View>
-              <Text style={styles.playTitle}>Speel</Text>
-              <Text style={styles.playSubtitle}>2-4 spelers</Text>
-            </View>
-
-            <View style={styles.entryChip}>
-              <Text style={styles.entryChipLabel}>Inzet</Text>
-              <Text style={styles.entryChipValue}>{entryCostCoins} coins</Text>
-            </View>
-          </View>
-
-          <Pressable
-            style={[styles.primaryPlayButton, playDisabled && styles.disabledButton]}
-            onPress={createRoom}
-            disabled={playDisabled}
-          >
-            <Text style={styles.primaryPlayButtonText}>
-              {creatingRoom ? "Openen..." : "Nieuwe tafel"}
-            </Text>
-          </Pressable>
-
-          <View style={styles.joinCompactCard}>
-            <View style={styles.joinHeader}>
-              <Text style={styles.joinTitle}>Kamercode</Text>
-            </View>
-
-            <View style={styles.joinCodeRow}>
-              <TextInput
-                style={styles.codeInputCompact}
-                value={roomCodeInput}
-                onChangeText={(value) => {
-                  clearError();
-                  setRoomCodeInput(
-                    value.toUpperCase().replace(/[^A-Z0-9]/g, "")
-                  );
-                }}
-                placeholder="ABC12"
-                placeholderTextColor="#9ca3af"
-                autoCapitalize="characters"
-                autoComplete="off"
-                autoCorrect={false}
-                maxLength={5}
-                returnKeyType="join"
-                blurOnSubmit
-                onSubmitEditing={() => {
-                  if (connected && roomCodeReady && profileReady) {
-                    joinRoom();
-                  } else {
-                    Keyboard.dismiss();
-                  }
-                }}
-              />
-
-              <Pressable
-                style={[
-                  styles.joinCompactButton,
-                  (!connected || !roomCodeReady || isBusy || !profileReady) &&
-                    styles.disabledButton,
-                ]}
-                onPress={joinRoom}
-                disabled={!connected || !roomCodeReady || isBusy || !profileReady}
-              >
-                <Text style={styles.joinCompactButtonText}>
-                  {joiningRoom ? "..." : "Join"}
-                </Text>
-              </Pressable>
-            </View>
-          </View>
-        </View>
-
-        <Pressable
-          style={styles.rulesPreviewCard}
-          onPress={openRules}
-        >
-          <View>
-            <Text style={styles.rulesPreviewTitle}>Regels</Text>
-            <Text style={styles.rulesPreviewText}>
-              Kort overzicht.
-            </Text>
-          </View>
-          <Text style={styles.rulesPreviewCta}>Bekijk</Text>
-        </Pressable>
-
-        <View style={styles.homeSecondaryActions}>
-          <Pressable
-            style={styles.homeSecondaryButton}
-            onPress={openShop}
-          >
-            <Text style={styles.homeSecondaryTitle}>Shop</Text>
-            <Text style={styles.homeSecondaryText}>
-              {canClaimDailyGems
-                ? `+${DAILY_GEMS} gems klaar`
-                : `Season level ${season.level}`}
-            </Text>
-          </Pressable>
-
-          <Pressable
-            style={styles.homeSecondaryButtonAlt}
-            onPress={openSettings}
-          >
-            <Text style={styles.homeSecondaryTitleAlt}>Profiel</Text>
-            <Text style={styles.homeSecondaryTextAlt}>
-              Naam wijzigen
-            </Text>
-          </Pressable>
-        </View>
 
         <Modal visible={showShop} transparent animationType="fade">
           <View style={styles.modalOverlay}>
-            <View style={[styles.modalCard, styles.shopModalCard]}>
-              <View style={styles.modalHeaderRow}>
-                <View>
-                  <Text style={styles.modalTitleLeft}>Shop</Text>
-                </View>
-
-                <Pressable
-                  style={styles.modalCloseButton}
-                  onPress={() => setShowShop(false)}
-                >
-                  <Text style={styles.modalCloseText}>Sluit</Text>
-                </Pressable>
-              </View>
+            <GameModalFrame
+              eyebrow="Collectie"
+              title="Shop"
+              text="Unlock kaartbacks, tafels, avatars en frames."
+              onClose={() => setShowShop(false)}
+              frameStyle={styles.shopModalCard}
+            >
 
               {economyNotice ? (
                 <Pressable
@@ -461,19 +1239,175 @@ export function LobbyScreen({
                   selectCardBack={selectCardBack}
                   buyTableSkin={buyTableSkin}
                   selectTableSkin={selectTableSkin}
+                  buyAvatar={buyAvatar}
+                  selectAvatar={selectAvatar}
+                  buyAvatarFrame={buyAvatarFrame}
+                  selectAvatarFrame={selectAvatarFrame}
+                  claimDailyMission={claimDailyMission}
                   claimSeasonReward={claimSeasonReward}
                   claimMilestoneReward={claimMilestoneReward}
                 />
               </ScrollView>
-            </View>
+            </GameModalFrame>
+          </View>
+        </Modal>
+
+        <Modal visible={showMatchmaking} transparent animationType="fade">
+          <View style={styles.modalOverlay}>
+            <GameModalFrame
+              eyebrow="Binnenkort"
+              title="Online zoeken"
+              text={`Voor straks: zoeken, matchen met spelers uit ${matchmakingPreview.region} en direct aan tafel.`}
+              variant="dark"
+              onClose={() => setShowMatchmaking(false)}
+              frameStyle={styles.gameFeatureModalCard}
+            >
+              <View style={styles.featureModalHero}>
+                <View style={styles.featureModalIcon}>
+                  <Text style={styles.featureModalIconText}>NL</Text>
+                </View>
+                <View style={styles.featureModalCopy}>
+                  <Text style={styles.featureModalEyebrow}>
+                    {matchmakingPreview.ruleset}
+                  </Text>
+                  <Text style={styles.featureModalTitle}>Zoeken staat klaar</Text>
+                  <Text style={styles.featureModalText}>
+                    De UI is voorbereid. Backend matchmaking koppelen we later.
+                  </Text>
+                </View>
+              </View>
+
+              <View style={styles.featureRoadmapList}>
+                <View style={styles.matchmakingStatusCard}>
+                  <View style={styles.matchmakingPulse} />
+                  <View style={styles.matchmakingStatusCopy}>
+                    <Text style={styles.matchmakingStatusTitle}>
+                      Spelers zoeken...
+                    </Text>
+                    <Text style={styles.matchmakingStatusText}>
+                      {matchmakingPreview.region} - {matchmakingPreview.ruleset}
+                    </Text>
+                  </View>
+                  <Text style={styles.matchmakingWaitText}>
+                    ~{matchmakingPreview.estimatedWaitSeconds}s
+                  </Text>
+                </View>
+
+                {matchmakingPreview.steps.map((step, index) => (
+                  <View key={step} style={styles.featureRoadmapItem}>
+                    <Text style={styles.featureRoadmapNumber}>{index + 1}</Text>
+                    <Text style={styles.featureRoadmapText}>{step}</Text>
+                  </View>
+                ))}
+              </View>
+
+              <GameButton
+                label="Klinkt goed"
+                onPress={() => setShowMatchmaking(false)}
+              />
+            </GameModalFrame>
+          </View>
+        </Modal>
+
+        <Modal visible={showSocial} transparent animationType="fade">
+          <View style={styles.modalOverlay}>
+            <GameModalFrame
+              eyebrow="Social hub"
+              title="Vrienden"
+              text="Profielen, invites en vriendenlijst zijn voorbereid voor de live versie."
+              variant="dark"
+              onClose={() => setShowSocial(false)}
+              frameStyle={styles.gameFeatureModalCard}
+            >
+              <View style={styles.featureModalHero}>
+                <View
+                  style={[
+                    styles.featureModalIcon,
+                    {
+                      backgroundColor: selectedAvatar.backgroundColor,
+                      borderColor: selectedAvatarFrame.borderColor,
+                    },
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.featureModalIconText,
+                      {
+                        color: selectedAvatar.textColor,
+                      },
+                    ]}
+                  >
+                    {selectedAvatar.badge || name.slice(0, 1).toUpperCase() || "P"}
+                  </Text>
+                </View>
+                <View style={styles.featureModalCopy}>
+                  <Text style={styles.featureModalEyebrow}>Preview</Text>
+                  <Text style={styles.featureModalTitle}>Invite klaar</Text>
+                  <Text style={styles.featureModalText}>
+                    Later kun je spelers toevoegen na een potje of direct uitnodigen.
+                  </Text>
+                </View>
+              </View>
+
+              <View style={styles.friendPreviewList}>
+                <View style={styles.socialProfileCard}>
+                  <View style={styles.socialProfileLevel}>
+                    <Text style={styles.socialProfileLevelText}>
+                      Lv {season.level}
+                    </Text>
+                  </View>
+                  <View style={styles.socialProfileCopy}>
+                    <Text style={styles.socialProfileName}>{displayName}</Text>
+                    <Text style={styles.socialProfileText}>
+                      Profiel preview - later klikbaar voor stats en invite.
+                    </Text>
+                  </View>
+                </View>
+
+                {previewFriends.map((friend) => (
+                  <View key={friend.name} style={styles.friendPreviewRow}>
+                    <View style={styles.friendPreviewAvatar}>
+                      <Text style={styles.friendPreviewAvatarText}>
+                        {friend.name.slice(0, 1)}
+                      </Text>
+                    </View>
+                    <View style={styles.friendPreviewCopy}>
+                      <Text style={styles.friendPreviewName}>{friend.name}</Text>
+                      <Text style={styles.friendPreviewStatus}>
+                        {friend.status}
+                      </Text>
+                    </View>
+                    <View style={styles.friendPreviewButton}>
+                      <Text style={styles.friendPreviewButtonText}>
+                        {friend.cta}
+                      </Text>
+                    </View>
+                  </View>
+                ))}
+              </View>
+
+              <GameButton
+                label="Sluit"
+                onPress={() => setShowSocial(false)}
+                tone="secondary"
+              />
+            </GameModalFrame>
           </View>
         </Modal>
 
         <Modal visible={showSettings} transparent animationType="fade">
           <View style={styles.modalOverlay}>
-            <View style={styles.modalCard}>
-              <Text style={styles.modalTitle}>Instellingen</Text>
-              <Text style={styles.modalText}>Je naam staat vast op de home.</Text>
+            <GameModalFrame
+              eyebrow="Profiel"
+              title="Instellingen"
+              text="Naam, haptics, kaartgrootte en taal."
+              onClose={() => {
+                setDraftName(name);
+                setDraftSettings(settings);
+                setSettingsSavedMessage(null);
+                setShowSettings(false);
+              }}
+            >
 
               <Text style={styles.inputLabel}>Spelersnaam</Text>
               <TextInput
@@ -486,118 +1420,119 @@ export function LobbyScreen({
                 autoCorrect={false}
                 maxLength={18}
                 returnKeyType="done"
-                onSubmitEditing={saveProfileName}
+                onSubmitEditing={saveProfileSettings}
               />
 
               <View style={styles.settingsGroup}>
                 <SettingSwitch
                   label="Haptics"
-                  enabled={settings.hapticsEnabled}
+                  enabled={draftSettings.hapticsEnabled}
                   onPress={() =>
-                    updateSettings({
-                      hapticsEnabled: !settings.hapticsEnabled,
+                    updateDraftSettings({
+                      hapticsEnabled: !draftSettings.hapticsEnabled,
                     })
                   }
                 />
 
                 <SettingSegment<CardSizeSetting>
                   label="Kaarten"
-                  value={settings.cardSize}
+                  value={draftSettings.cardSize}
                   options={[
                     { label: "Compact", value: "compact" },
                     { label: "Normaal", value: "normal" },
                     { label: "Groot", value: "large" },
                   ]}
-                  onChange={(cardSize) => updateSettings({ cardSize })}
+                  onChange={(cardSize) => updateDraftSettings({ cardSize })}
                 />
 
                 <SettingSegment<MotionSetting>
                   label="Animatie"
-                  value={settings.motionLevel}
+                  value={draftSettings.motionLevel}
                   options={[
                     { label: "Rustig", value: "low" },
                     { label: "Normaal", value: "normal" },
                   ]}
-                  onChange={(motionLevel) => updateSettings({ motionLevel })}
+                  onChange={(motionLevel) => updateDraftSettings({ motionLevel })}
                 />
 
                 <SettingSegment<LanguageSetting>
                   label="Taal"
-                  value={settings.language}
+                  value={draftSettings.language}
                   options={[
                     { label: "NL", value: "nl" },
-                    { label: "EN", value: "en" },
+                    { label: "EN", value: "en", disabled: true },
                   ]}
-                  onChange={(language) => updateSettings({ language })}
+                  onChange={(language) => updateDraftSettings({ language })}
                 />
               </View>
 
-              <Pressable
-                style={[
-                  styles.modalYesButton,
-                  !draftNameReady && styles.disabledButton,
-                ]}
-                onPress={saveProfileName}
-                disabled={!draftNameReady}
-              >
-                <Text style={styles.modalYesButtonText}>Opslaan</Text>
-              </Pressable>
+              <Text style={styles.settingHelperText}>
+                Kaartgrootte en animatie gelden na opslaan direct in de speeltafel. Engels komt later.
+              </Text>
 
-              <Pressable
-                style={styles.cancelButton}
+              <GameButton
+                label={settingsSavedMessage ?? "Opslaan"}
+                onPress={saveProfileSettings}
+                disabled={!draftNameReady}
+              />
+
+              <GameButton
+                label="Annuleren"
+                tone="secondary"
                 onPress={() => {
                   setDraftName(name);
+                  setDraftSettings(settings);
+                  setSettingsSavedMessage(null);
                   setShowSettings(false);
                 }}
-              >
-                <Text style={styles.cancelButtonText}>Annuleren</Text>
-              </Pressable>
-            </View>
+              />
+            </GameModalFrame>
           </View>
         </Modal>
 
         <Modal visible={showRules} transparent animationType="fade">
           <View style={styles.modalOverlay}>
-            <View style={styles.modalCard}>
-              <Text style={styles.modalTitle}>Snelregels</Text>
-              <Text style={styles.modalText}>
-                De belangrijkste acties.
-              </Text>
+            <GameModalFrame
+              eyebrow="Pesten"
+              title="Spelregels"
+              text="Kort en duidelijk, zodat niemand vastloopt."
+              onClose={() => setShowRules(false)}
+              frameStyle={styles.rulesModalCard}
+            >
 
-              <View style={styles.rulesList}>
-                <RuleItem
-                  label="7"
-                  text="Zelfde symbool. Direct na een 7 mag nog een 7."
-                />
-                <RuleItem
-                  label="2/Joker"
-                  text="Stapel of pak alles."
-                />
-                <RuleItem
-                  label="Boer"
-                  text="Kies nieuw symbool."
-                />
-                <RuleItem
-                  label="Heer"
-                  text="Nog een kaart leggen."
-                />
-                <RuleItem
-                  label="Finish"
-                  text="Geen A, 2, 7, 8, J, K of Joker als laatste."
-                />
-              </View>
-
-              <Pressable
-                style={styles.modalYesButton}
-                onPress={() => setShowRules(false)}
+              <ScrollView
+                style={styles.rulesScroll}
+                contentContainerStyle={styles.rulesList}
+                showsVerticalScrollIndicator={false}
               >
-                <Text style={styles.modalYesButtonText}>Ik snap het</Text>
-              </Pressable>
-            </View>
+                {pestenRuleSections.map((section) => (
+                  <RuleSectionView key={section.title} section={section} />
+                ))}
+              </ScrollView>
+
+              <GameButton
+                label="Ik snap het"
+                onPress={() => setShowRules(false)}
+              />
+            </GameModalFrame>
           </View>
         </Modal>
       </View>
     </ScrollView>
+
+    <View style={styles.homeBottomNavWrap}>
+      <BottomNav
+        active={activeTab}
+        onProfile={openSettings}
+        onRules={openRules}
+        onShop={openShop}
+        onSocial={openSocial}
+        onPlay={() => goToTab("play")}
+        shopBadge={canClaimDailyGems}
+        socialBadge
+      />
+    </View>
+  </View>
   );
 
   return (
@@ -610,76 +1545,43 @@ export function LobbyScreen({
   );
 }
 
-function ProfileSummary({
-  name,
-  wallet,
-  season,
-  selectedCardBack,
-  winRate,
-  openSettings,
-}: {
-  name: string;
-  wallet: Wallet;
-  season: SeasonProgress;
-  selectedCardBack: CardBackOption;
-  winRate: number;
-  openSettings: () => void;
-}) {
+function RuleSectionView({ section }: { section: RuleSection }) {
   return (
-    <View style={styles.profileSummaryCard}>
-      <View style={styles.profileAvatar}>
-        <Text style={styles.profileAvatarText}>
-          {name.slice(0, 1).toUpperCase()}
-        </Text>
-      </View>
-
-      <View style={styles.profileSummaryMain}>
-        <Text style={styles.profileWelcome}>Welkom terug</Text>
-        <Text style={styles.profileName}>{name}</Text>
-      </View>
-
-      <Pressable style={styles.profileSettingsButton} onPress={openSettings}>
-        <Text style={styles.profileSettingsText}>Wijzig</Text>
-      </Pressable>
-
-      <View style={styles.profileStatsPanel}>
-        <View style={styles.profileStatItem}>
-          <Text style={styles.profileStatValue}>Lv {season.level}</Text>
-          <Text style={styles.profileStatLabel}>Season</Text>
-        </View>
-
-        <View style={styles.profileStatItem}>
-          <Text style={styles.profileStatValue}>{wallet.wins}</Text>
-          <Text style={styles.profileStatLabel}>Wins</Text>
-        </View>
-
-        <View style={styles.profileStatItem}>
-          <Text style={styles.profileStatValue}>{winRate}%</Text>
-          <Text style={styles.profileStatLabel}>Winrate</Text>
-        </View>
-
-        <View style={styles.profileCardBackPreview}>
-          <Image
-            source={selectedCardBack.image}
-            style={styles.profileCardBackImage}
-            resizeMode="cover"
+    <View style={styles.ruleSectionCard}>
+      <Text style={styles.ruleSectionTitle}>{section.title}</Text>
+      <Text style={styles.ruleSectionIntro}>{section.intro}</Text>
+      <View style={styles.ruleSectionList}>
+        {section.rules.map((rule) => (
+          <RuleItem
+            key={`${section.title}-${rule.label}-${rule.title}`}
+            label={rule.label}
+            title={rule.title}
+            text={rule.text}
           />
-          <Text style={styles.profileCardBackText} numberOfLines={1}>
-            {selectedCardBack.title}
-          </Text>
-        </View>
+        ))}
       </View>
     </View>
   );
 }
 
-function RuleItem({ label, text }: { label: string; text: string }) {
+function RuleItem({
+  label,
+  title,
+  text,
+}: {
+  label: string;
+  title: string;
+  text: string;
+}) {
   return (
     <View style={styles.ruleHelpItem}>
       <View style={styles.ruleHelpBadge}>
         <Text style={styles.ruleHelpBadgeText}>{label}</Text>
       </View>
-      <Text style={styles.ruleHelpText}>{text}</Text>
+      <View style={styles.ruleHelpCopy}>
+        <Text style={styles.ruleHelpTitle}>{title}</Text>
+        <Text style={styles.ruleHelpText}>{text}</Text>
+      </View>
     </View>
   );
 }
@@ -738,17 +1640,19 @@ function SettingSwitch({
   onPress: () => void;
 }) {
   return (
-    <View style={styles.settingRow}>
+    <Pressable
+      style={styles.settingRow}
+      onPress={onPress}
+      accessibilityRole="switch"
+      accessibilityState={{ checked: enabled }}
+    >
       <Text style={styles.settingLabel}>{label}</Text>
-      <Pressable
-        style={[styles.settingToggle, enabled && styles.settingToggleOn]}
-        onPress={onPress}
-      >
+      <View style={[styles.settingToggle, enabled && styles.settingToggleOn]}>
         <View
           style={[styles.settingToggleKnob, enabled && styles.settingToggleKnobOn]}
         />
-      </Pressable>
-    </View>
+      </View>
+    </Pressable>
   );
 }
 
@@ -763,6 +1667,7 @@ function SettingSegment<T extends string>({
   options: Array<{
     label: string;
     value: T;
+    disabled?: boolean;
   }>;
   onChange: (value: T) => void;
 }) {
@@ -776,17 +1681,29 @@ function SettingSegment<T extends string>({
             style={[
               styles.settingSegmentButton,
               value === option.value && styles.settingSegmentButtonOn,
+              option.disabled && styles.settingSegmentButtonDisabled,
             ]}
-            onPress={() => onChange(option.value)}
+            onPress={() => {
+              if (!option.disabled) onChange(option.value);
+            }}
+            disabled={option.disabled}
+            accessibilityState={{
+              disabled: option.disabled,
+              selected: value === option.value,
+            }}
           >
             <Text
               style={[
                 styles.settingSegmentText,
                 value === option.value && styles.settingSegmentTextOn,
+                option.disabled && styles.settingSegmentTextDisabled,
               ]}
             >
               {option.label}
             </Text>
+            {option.disabled ? (
+              <Text style={styles.settingSegmentSubText}>Binnenkort</Text>
+            ) : null}
           </Pressable>
         ))}
       </View>
@@ -807,6 +1724,11 @@ function EconomyPanel({
   selectCardBack,
   buyTableSkin,
   selectTableSkin,
+  buyAvatar,
+  selectAvatar,
+  buyAvatarFrame,
+  selectAvatarFrame,
+  claimDailyMission,
   claimSeasonReward,
   claimMilestoneReward,
 }: {
@@ -822,6 +1744,11 @@ function EconomyPanel({
   selectCardBack: (cardBackId: string) => void;
   buyTableSkin: (tableSkinId: string) => void;
   selectTableSkin: (tableSkinId: string) => void;
+  buyAvatar: (avatarId: string) => void;
+  selectAvatar: (avatarId: string) => void;
+  buyAvatarFrame: (frameId: string) => void;
+  selectAvatarFrame: (frameId: string) => void;
+  claimDailyMission: (missionId: string) => void;
   claimSeasonReward: (rewardId: string) => void;
   claimMilestoneReward: (rewardId: string) => void;
 }) {
@@ -835,6 +1762,7 @@ function EconomyPanel({
   const [activeShopTab, setActiveShopTab] = useState<ShopTab>("wallet");
   const [cardBackFilter, setCardBackFilter] =
     useState<CardBackFilter>("all");
+  const [preview, setPreview] = useState<ShopPreview | null>(null);
   const featuredCardBack =
     cardBackOptions.find((cardBack) => {
       const owned =
@@ -884,177 +1812,106 @@ function EconomyPanel({
 
   return (
     <View style={styles.shopSheet}>
-      <View style={styles.shopBalanceRow}>
-        <CurrencyPill label="Coins" value={wallet.coins} tone="coin" />
-        <CurrencyPill label="Gems" value={wallet.gems} tone="gem" />
+      <View style={styles.shopHeaderCard}>
+        <View style={styles.shopHeaderCopy}>
+          <Text style={styles.shopHeaderTitle}>Markt</Text>
+          <Text style={styles.shopHeaderText}>
+            Kaartbacks, tafels, avatars en beloningen.
+          </Text>
+        </View>
+        <View style={styles.shopBalanceRow}>
+          <CurrencyPill label="Coins" value={wallet.coins} tone="coin" />
+          <CurrencyPill label="Gems" value={wallet.gems} tone="gem" />
+        </View>
       </View>
 
+      <DailyRewardBanner
+        canClaimDailyGems={canClaimDailyGems}
+        claimDailyGems={claimDailyGems}
+      />
+
       <View style={styles.shopTabBar}>
-        <Pressable
-          style={[
-            styles.shopTabButton,
-            activeShopTab === "wallet" && styles.shopTabButtonActive,
-          ]}
-          onPress={() => chooseShopTab("wallet")}
-        >
-          <Text
+        {shopTabs.map((tab) => (
+          <Pressable
+            key={tab.key}
             style={[
-              styles.shopTabText,
-              activeShopTab === "wallet" && styles.shopTabTextActive,
+              styles.shopTabButton,
+              activeShopTab === tab.key && styles.shopTabButtonActive,
             ]}
+            onPress={() => chooseShopTab(tab.key)}
           >
-            Munten
-          </Text>
-        </Pressable>
-
-        <Pressable
-          style={[
-            styles.shopTabButton,
-            activeShopTab === "cardbacks" && styles.shopTabButtonActive,
-          ]}
-          onPress={() => chooseShopTab("cardbacks")}
-        >
-          <Text
-            style={[
-              styles.shopTabText,
-              activeShopTab === "cardbacks" && styles.shopTabTextActive,
-            ]}
-          >
-            Backs
-          </Text>
-        </Pressable>
-
-        <Pressable
-          style={[
-            styles.shopTabButton,
-            activeShopTab === "tables" && styles.shopTabButtonActive,
-          ]}
-          onPress={() => chooseShopTab("tables")}
-        >
-          <Text
-            style={[
-              styles.shopTabText,
-              activeShopTab === "tables" && styles.shopTabTextActive,
-            ]}
-          >
-            Tafels
-          </Text>
-        </Pressable>
-
-        <Pressable
-          style={[
-            styles.shopTabButton,
-            activeShopTab === "avatars" && styles.shopTabButtonActive,
-          ]}
-          onPress={() => chooseShopTab("avatars")}
-        >
-          <Text
-            style={[
-              styles.shopTabText,
-              activeShopTab === "avatars" && styles.shopTabTextActive,
-            ]}
-          >
-            Avatars
-          </Text>
-        </Pressable>
-
-        <Pressable
-          style={[
-            styles.shopTabButton,
-            activeShopTab === "frames" && styles.shopTabButtonActive,
-          ]}
-          onPress={() => chooseShopTab("frames")}
-        >
-          <Text
-            style={[
-              styles.shopTabText,
-              activeShopTab === "frames" && styles.shopTabTextActive,
-            ]}
-          >
-            Frames
-          </Text>
-        </Pressable>
-
-        <Pressable
-          style={[
-            styles.shopTabButton,
-            activeShopTab === "season" && styles.shopTabButtonActive,
-          ]}
-          onPress={() => chooseShopTab("season")}
-        >
-          <Text
-            style={[
-              styles.shopTabText,
-              activeShopTab === "season" && styles.shopTabTextActive,
-            ]}
-          >
-            Season
-          </Text>
-        </Pressable>
+            <Text
+              style={[
+                styles.shopTabText,
+                activeShopTab === tab.key && styles.shopTabTextActive,
+              ]}
+            >
+              {tab.label}
+            </Text>
+          </Pressable>
+        ))}
       </View>
 
       {activeShopTab === "wallet" ? (
         <>
           <View style={styles.shopSection}>
-            <Text style={styles.shopSectionTitle}>Gratis</Text>
-            <Pressable
-              style={[
-                styles.dailyRewardCard,
-                !canClaimDailyGems && styles.dailyRewardCardClaimed,
-              ]}
-              onPress={claimDailyGems}
-              disabled={!canClaimDailyGems}
-            >
-              <View>
-                <Text style={styles.dailyRewardTitle}>Daily gems</Text>
-                <Text style={styles.dailyRewardText}>
-                  {canClaimDailyGems
-                    ? `Claim +${DAILY_GEMS}`
-                    : "Geclaimd"}
-                </Text>
-              </View>
-              <Text style={styles.dailyRewardValue}>
-                {canClaimDailyGems ? `+${DAILY_GEMS}` : "OK"}
+            <View>
+              <Text style={styles.shopSectionTitle}>Valuta</Text>
+              <Text style={styles.shopSectionSubtitle}>
+                Alleen wisselen is nu echt actief. Aankopen met geld blijven bewust placeholder.
               </Text>
-            </Pressable>
+            </View>
+
+            <View style={styles.shopProductList}>
+              <ShopProductCard
+                title={`+${COINS_PER_GEM_PACK} coins`}
+                text={`${GEM_PACK_COST} gems - direct wisselen`}
+                actionLabel="Wissel"
+                image={coinImage}
+                onPress={buyCoinsWithGems}
+              />
+              <ShopProductCard
+                title="Gems kopen"
+                text="Later via Apple/Google in-app purchases."
+                actionLabel="Binnenkort"
+                image={gemImage}
+                onPress={previewGemPurchase}
+                placeholder
+              />
+              <ShopProductCard
+                title="Premium pass"
+                text="Season rewards en premium cosmetics later."
+                actionLabel="Later"
+                onPress={previewPremiumPass}
+                placeholder
+              />
+            </View>
           </View>
 
           <View style={styles.shopSection}>
-            <Text style={styles.shopSectionTitle}>Gems</Text>
-            <Pressable
-              style={styles.gemPurchaseCard}
-              onPress={previewGemPurchase}
-            >
-              <View style={styles.shopActionIconWrap}>
-                <Image source={gemImage} style={styles.shopActionIcon} />
-              </View>
-
-              <View style={styles.shopActionTextBox}>
-                <Text style={styles.gemPurchaseTitle}>Koop gems</Text>
-                <Text style={styles.gemPurchaseText}>
-                  Later via Apple/Google.
-                </Text>
-              </View>
-            </Pressable>
+            <View>
+              <Text style={styles.shopSectionTitle}>Dagmissies</Text>
+              <Text style={styles.shopSectionSubtitle}>
+                Speel rustig door en claim zodra een missie af is.
+              </Text>
+            </View>
+            {dailyMissions.map((mission) => (
+              <DailyMissionCard
+                key={mission.id}
+                mission={mission}
+                wallet={wallet}
+                claimDailyMission={claimDailyMission}
+              />
+            ))}
           </View>
 
           <View style={styles.shopSection}>
-            <Text style={styles.shopSectionTitle}>Coins</Text>
-            <Pressable style={styles.exchangeCard} onPress={buyCoinsWithGems}>
-              <View style={styles.exchangeIconRow}>
-                <Image source={coinImage} style={styles.exchangeIcon} />
-                <View>
-                  <Text style={styles.exchangeTitle}>
-                    +{COINS_PER_GEM_PACK} coins
-                  </Text>
-                  <Text style={styles.exchangeText}>{GEM_PACK_COST} gems</Text>
-                </View>
-              </View>
-            </Pressable>
-          </View>
-
-          <View style={styles.shopSection}>
-            <Text style={styles.shopSectionTitle}>Missies</Text>
+            <View>
+              <Text style={styles.shopSectionTitle}>Mijlpalen</Text>
+              <Text style={styles.shopSectionSubtitle}>
+                Lange termijn beloningen voor potjes, winst en collectie.
+              </Text>
+            </View>
             {milestoneRewards.map((reward) => (
               <MilestoneRewardCard
                 key={reward.id}
@@ -1128,6 +1985,7 @@ function EconomyPanel({
                 buyCardBack={buyCardBack}
                 selectCardBack={selectCardBack}
                 hapticsEnabled={hapticsEnabled}
+                onPreview={(item) => setPreview({ kind: "cardback", item })}
               />
             ))}
           </View>
@@ -1161,6 +2019,7 @@ function EconomyPanel({
                 buyTableSkin={buyTableSkin}
                 selectTableSkin={selectTableSkin}
                 hapticsEnabled={hapticsEnabled}
+                onPreview={(item) => setPreview({ kind: "table", item })}
               />
             ))}
           </View>
@@ -1168,17 +2027,59 @@ function EconomyPanel({
       ) : null}
 
       {activeShopTab === "avatars" ? (
-        <CosmeticComingSoon
-          title="Avatars"
-          text="Binnenkort: avatar icons, win poses en profielbadges."
-        />
+        <View style={styles.shopSection}>
+          <View style={styles.cardBackCollectionHeader}>
+            <View>
+              <Text style={styles.shopSectionTitle}>Avatars</Text>
+              <Text style={styles.cardBackCollectionSubtitle}>
+                {wallet.ownedAvatarIds.length}/{avatarOptions.length} in bezit
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.cosmeticGrid}>
+            {avatarOptions.map((avatar) => (
+              <AvatarShopItem
+                key={avatar.id}
+                avatar={avatar}
+                wallet={wallet}
+                season={season}
+                buyAvatar={buyAvatar}
+                selectAvatar={selectAvatar}
+                hapticsEnabled={hapticsEnabled}
+                onPreview={(item) => setPreview({ kind: "avatar", item })}
+              />
+            ))}
+          </View>
+        </View>
       ) : null}
 
       {activeShopTab === "frames" ? (
-        <CosmeticComingSoon
-          title="Frames"
-          text="Binnenkort: gouden randen, streak frames en season rewards."
-        />
+        <View style={styles.shopSection}>
+          <View style={styles.cardBackCollectionHeader}>
+            <View>
+              <Text style={styles.shopSectionTitle}>Frames</Text>
+              <Text style={styles.cardBackCollectionSubtitle}>
+                {wallet.ownedAvatarFrameIds.length}/{avatarFrameOptions.length} in bezit
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.cosmeticGrid}>
+            {avatarFrameOptions.map((frame) => (
+              <AvatarFrameShopItem
+                key={frame.id}
+                frame={frame}
+                wallet={wallet}
+                season={season}
+                buyAvatarFrame={buyAvatarFrame}
+                selectAvatarFrame={selectAvatarFrame}
+                hapticsEnabled={hapticsEnabled}
+                onPreview={(item) => setPreview({ kind: "frame", item })}
+              />
+            ))}
+          </View>
+        </View>
       ) : null}
 
       {activeShopTab === "season" ? (
@@ -1248,7 +2149,112 @@ function EconomyPanel({
           </View>
         </View>
       ) : null}
+
+      <Modal visible={Boolean(preview)} transparent animationType="fade">
+        <ShopPreviewModal
+          preview={preview}
+          wallet={wallet}
+          season={season}
+          onClose={() => setPreview(null)}
+          buyCardBack={buyCardBack}
+          selectCardBack={selectCardBack}
+          buyTableSkin={buyTableSkin}
+          selectTableSkin={selectTableSkin}
+          buyAvatar={buyAvatar}
+          selectAvatar={selectAvatar}
+          buyAvatarFrame={buyAvatarFrame}
+          selectAvatarFrame={selectAvatarFrame}
+        />
+      </Modal>
     </View>
+  );
+}
+
+function DailyRewardBanner({
+  canClaimDailyGems,
+  claimDailyGems,
+}: {
+  canClaimDailyGems: boolean;
+  claimDailyGems: () => void;
+}) {
+  return (
+    <Pressable
+      style={[
+        styles.dailyRewardCard,
+        !canClaimDailyGems && styles.dailyRewardCardClaimed,
+      ]}
+      onPress={claimDailyGems}
+      disabled={!canClaimDailyGems}
+    >
+      <View style={styles.dailyRewardCopy}>
+        <Text style={styles.dailyRewardTitle}>Daily reward</Text>
+        <Text style={styles.dailyRewardText}>
+          {canClaimDailyGems
+            ? `Vandaag klaar: +${DAILY_GEMS} gems`
+            : "Vandaag geclaimd. Morgen staat er weer een reward klaar."}
+        </Text>
+      </View>
+      <View
+        style={[
+          styles.dailyRewardAction,
+          !canClaimDailyGems && styles.dailyRewardActionClaimed,
+        ]}
+      >
+        <Text style={styles.dailyRewardValue}>
+          {canClaimDailyGems ? "Claim" : "Geclaimd"}
+        </Text>
+      </View>
+    </Pressable>
+  );
+}
+
+function ShopProductCard({
+  title,
+  text,
+  actionLabel,
+  image,
+  onPress,
+  placeholder,
+}: {
+  title: string;
+  text: string;
+  actionLabel: string;
+  image?: ImageSourcePropType;
+  onPress: () => void;
+  placeholder?: boolean;
+}) {
+  return (
+    <Pressable
+      style={[styles.shopProductCard, placeholder && styles.shopProductPlaceholder]}
+      onPress={onPress}
+    >
+      <View style={styles.shopProductPreview}>
+        {image ? (
+          <Image source={image} style={styles.shopProductImage} />
+        ) : (
+          <Text style={styles.shopProductIcon}>S1</Text>
+        )}
+      </View>
+      <View style={styles.shopProductCopy}>
+        <Text style={styles.shopProductTitle}>{title}</Text>
+        <Text style={styles.shopProductText}>{text}</Text>
+      </View>
+      <View
+        style={[
+          styles.shopProductAction,
+          placeholder && styles.shopProductActionPlaceholder,
+        ]}
+      >
+        <Text
+          style={[
+            styles.shopProductActionText,
+            placeholder && styles.shopProductActionTextPlaceholder,
+          ]}
+        >
+          {actionLabel}
+        </Text>
+      </View>
+    </Pressable>
   );
 }
 
@@ -1284,41 +2290,30 @@ function TableSkinShopItem({
   buyTableSkin,
   selectTableSkin,
   hapticsEnabled,
+  onPreview,
 }: {
   tableSkin: TableSkinOption;
   wallet: Wallet;
   buyTableSkin: (tableSkinId: string) => void;
   selectTableSkin: (tableSkinId: string) => void;
   hapticsEnabled: boolean;
+  onPreview: (tableSkin: TableSkinOption) => void;
 }) {
-  const owned =
-    wallet.ownedTableSkinIds.includes(tableSkin.id) ||
-    (tableSkin.premium && wallet.premiumPass);
-  const selected = wallet.selectedTableSkinId === tableSkin.id;
-  const priceCoins = tableSkin.priceCoins ?? 0;
-  const canBuy = !owned && !tableSkin.premium && wallet.coins >= priceCoins;
-  const canInteract = owned || canBuy;
+  const { canBuy, canInteract, owned, priceCoins, selected } =
+    getTableSkinShopState(tableSkin, wallet);
   const ctaLabel = selected
     ? "Actief"
     : owned
     ? "Gebruik"
     : tableSkin.premium
-    ? "Premium"
+    ? "Binnenkort"
     : canBuy
     ? "Koop"
     : `Nog ${Math.max(0, priceCoins - wallet.coins)}`;
 
   function handlePress() {
-    if (!canInteract) return;
-
     if (hapticsEnabled) Haptics.selectionAsync().catch(() => {});
-
-    if (owned) {
-      selectTableSkin(tableSkin.id);
-      return;
-    }
-
-    buyTableSkin(tableSkin.id);
+    onPreview(tableSkin);
   }
 
   return (
@@ -1330,7 +2325,6 @@ function TableSkinShopItem({
         !canInteract && styles.tableSkinCardDisabled,
       ]}
       onPress={handlePress}
-      disabled={!canInteract}
     >
       <View style={styles.tableSkinPreview}>
         <View
@@ -1430,9 +2424,10 @@ function getCardBackShopState(
   wallet: Wallet,
   season: SeasonProgress
 ) {
-  const owned =
+  const owned = Boolean(
     wallet.ownedCardBackIds.includes(cardBack.id) ||
-    (cardBack.premium && wallet.premiumPass);
+      (cardBack.premium && wallet.premiumPass)
+  );
   const selected = wallet.selectedCardBackId === cardBack.id;
   const levelLocked = Boolean(
     cardBack.unlockLevel && season.level < cardBack.unlockLevel
@@ -1450,6 +2445,450 @@ function getCardBackShopState(
     priceCoins,
     selected,
   };
+}
+
+function getTableSkinShopState(tableSkin: TableSkinOption, wallet: Wallet) {
+  const owned = Boolean(
+    wallet.ownedTableSkinIds.includes(tableSkin.id) ||
+      (tableSkin.premium && wallet.premiumPass)
+  );
+  const selected = wallet.selectedTableSkinId === tableSkin.id;
+  const priceCoins = tableSkin.priceCoins ?? 0;
+  const canBuy = !owned && !tableSkin.premium && wallet.coins >= priceCoins;
+
+  return {
+    canBuy,
+    canInteract: owned || canBuy,
+    owned,
+    priceCoins,
+    selected,
+  };
+}
+
+function getAvatarShopState(
+  avatar: AvatarOption,
+  wallet: Wallet,
+  season: SeasonProgress
+) {
+  const owned = Boolean(
+    wallet.ownedAvatarIds.includes(avatar.id) ||
+      (avatar.premium && wallet.premiumPass)
+  );
+  const selected = wallet.selectedAvatarId === avatar.id;
+  const levelLocked = Boolean(
+    avatar.unlockLevel && season.level < avatar.unlockLevel
+  );
+  const priceCoins = avatar.priceCoins ?? 0;
+  const canBuy =
+    !owned && !avatar.premium && !levelLocked && wallet.coins >= priceCoins;
+
+  return {
+    canBuy,
+    canInteract: owned || canBuy,
+    levelLocked,
+    owned,
+    priceCoins,
+    selected,
+  };
+}
+
+function getAvatarFrameShopState(
+  frame: AvatarFrameOption,
+  wallet: Wallet,
+  season: SeasonProgress
+) {
+  const owned = Boolean(
+    wallet.ownedAvatarFrameIds.includes(frame.id) ||
+      (frame.premium && wallet.premiumPass)
+  );
+  const selected = wallet.selectedAvatarFrameId === frame.id;
+  const levelLocked = Boolean(
+    frame.unlockLevel && season.level < frame.unlockLevel
+  );
+  const priceCoins = frame.priceCoins ?? 0;
+  const canBuy =
+    !owned && !frame.premium && !levelLocked && wallet.coins >= priceCoins;
+
+  return {
+    canBuy,
+    canInteract: owned || canBuy,
+    levelLocked,
+    owned,
+    priceCoins,
+    selected,
+  };
+}
+
+function getShopCtaLabel({
+  canBuy,
+  levelLocked,
+  owned,
+  premium,
+  priceCoins,
+  selected,
+  unlockLevel,
+  walletCoins,
+}: {
+  canBuy: boolean;
+  levelLocked?: boolean;
+  owned: boolean;
+  premium?: boolean;
+  priceCoins: number;
+  selected: boolean;
+  unlockLevel?: number;
+  walletCoins: number;
+}) {
+  if (selected) return "Actief";
+  if (owned) return "Gebruik";
+  if (premium) return "Binnenkort";
+  if (levelLocked) return `Level ${unlockLevel}`;
+  if (canBuy) return "Koop";
+
+  return `Nog ${Math.max(0, priceCoins - walletCoins)} coins`;
+}
+
+function AvatarShopItem({
+  avatar,
+  wallet,
+  season,
+  buyAvatar,
+  selectAvatar,
+  hapticsEnabled,
+  onPreview,
+}: {
+  avatar: AvatarOption;
+  wallet: Wallet;
+  season: SeasonProgress;
+  buyAvatar: (avatarId: string) => void;
+  selectAvatar: (avatarId: string) => void;
+  hapticsEnabled: boolean;
+  onPreview: (avatar: AvatarOption) => void;
+}) {
+  const { canBuy, levelLocked, owned, priceCoins, selected } =
+    getAvatarShopState(avatar, wallet, season);
+  const ctaLabel = getShopCtaLabel({
+    canBuy,
+    levelLocked,
+    owned,
+    premium: avatar.premium,
+    priceCoins,
+    selected,
+    unlockLevel: avatar.unlockLevel,
+    walletCoins: wallet.coins,
+  });
+
+  function handlePress() {
+    if (hapticsEnabled) Haptics.selectionAsync().catch(() => {});
+    onPreview(avatar);
+  }
+
+  return (
+    <Pressable
+      style={[
+        styles.cosmeticCard,
+        selected && styles.cosmeticCardSelected,
+        canBuy && styles.cosmeticCardBuyable,
+        !owned && !canBuy && styles.cosmeticCardDisabled,
+      ]}
+      onPress={handlePress}
+    >
+      <View
+        style={[
+          styles.cosmeticAvatarPreview,
+          {
+            backgroundColor: avatar.backgroundColor,
+          },
+        ]}
+      >
+        <Text
+          style={[
+            styles.cosmeticAvatarText,
+            {
+              color: avatar.textColor,
+            },
+          ]}
+        >
+          {avatar.badge || "A"}
+        </Text>
+      </View>
+
+      <Text style={styles.cosmeticTitle} numberOfLines={1}>
+        {avatar.title}
+      </Text>
+      <Text style={styles.cosmeticMeta}>
+        {owned ? avatar.rarity : `${priceCoins} coins`}
+      </Text>
+      <Text style={styles.cosmeticCta}>{ctaLabel}</Text>
+    </Pressable>
+  );
+}
+
+function AvatarFrameShopItem({
+  frame,
+  wallet,
+  season,
+  buyAvatarFrame,
+  selectAvatarFrame,
+  hapticsEnabled,
+  onPreview,
+}: {
+  frame: AvatarFrameOption;
+  wallet: Wallet;
+  season: SeasonProgress;
+  buyAvatarFrame: (frameId: string) => void;
+  selectAvatarFrame: (frameId: string) => void;
+  hapticsEnabled: boolean;
+  onPreview: (frame: AvatarFrameOption) => void;
+}) {
+  const { canBuy, levelLocked, owned, priceCoins, selected } =
+    getAvatarFrameShopState(frame, wallet, season);
+  const ctaLabel = getShopCtaLabel({
+    canBuy,
+    levelLocked,
+    owned,
+    premium: frame.premium,
+    priceCoins,
+    selected,
+    unlockLevel: frame.unlockLevel,
+    walletCoins: wallet.coins,
+  });
+
+  function handlePress() {
+    if (hapticsEnabled) Haptics.selectionAsync().catch(() => {});
+    onPreview(frame);
+  }
+
+  return (
+    <Pressable
+      style={[
+        styles.cosmeticCard,
+        selected && styles.cosmeticCardSelected,
+        canBuy && styles.cosmeticCardBuyable,
+        !owned && !canBuy && styles.cosmeticCardDisabled,
+      ]}
+      onPress={handlePress}
+    >
+      <View
+        style={[
+          styles.cosmeticFramePreview,
+          {
+            backgroundColor: frame.backgroundColor,
+            borderColor: frame.borderColor,
+            shadowColor: frame.glowColor,
+          },
+        ]}
+      >
+        <Text style={styles.cosmeticFrameText}>A</Text>
+      </View>
+
+      <Text style={styles.cosmeticTitle} numberOfLines={1}>
+        {frame.title}
+      </Text>
+      <Text style={styles.cosmeticMeta}>
+        {owned ? frame.rarity : `${priceCoins} coins`}
+      </Text>
+      <Text style={styles.cosmeticCta}>{ctaLabel}</Text>
+    </Pressable>
+  );
+}
+
+function ShopPreviewModal({
+  preview,
+  wallet,
+  season,
+  onClose,
+  buyCardBack,
+  selectCardBack,
+  buyTableSkin,
+  selectTableSkin,
+  buyAvatar,
+  selectAvatar,
+  buyAvatarFrame,
+  selectAvatarFrame,
+}: {
+  preview: ShopPreview | null;
+  wallet: Wallet;
+  season: SeasonProgress;
+  onClose: () => void;
+  buyCardBack: (cardBackId: string) => void;
+  selectCardBack: (cardBackId: string) => void;
+  buyTableSkin: (tableSkinId: string) => void;
+  selectTableSkin: (tableSkinId: string) => void;
+  buyAvatar: (avatarId: string) => void;
+  selectAvatar: (avatarId: string) => void;
+  buyAvatarFrame: (frameId: string) => void;
+  selectAvatarFrame: (frameId: string) => void;
+}) {
+  if (!preview) return <View />;
+
+  let title = "";
+  let description = "";
+  let rarity = "";
+  let ctaLabel = "";
+  let canInteract = false;
+  let onAction = () => {};
+
+  if (preview.kind === "cardback") {
+    const state = getCardBackShopState(preview.item, wallet, season);
+
+    title = preview.item.title;
+    description = preview.item.description;
+    rarity = preview.item.rarity;
+    ctaLabel = getShopCtaLabel({
+      ...state,
+      premium: preview.item.premium,
+      unlockLevel: preview.item.unlockLevel,
+      walletCoins: wallet.coins,
+    });
+    canInteract = state.canInteract;
+    onAction = () => {
+      if (state.owned) selectCardBack(preview.item.id);
+      else buyCardBack(preview.item.id);
+      onClose();
+    };
+  } else if (preview.kind === "table") {
+    const state = getTableSkinShopState(preview.item, wallet);
+
+    title = preview.item.title;
+    description = `${preview.item.rarity} tafel skin.`;
+    rarity = preview.item.rarity;
+    ctaLabel = getShopCtaLabel({
+      ...state,
+      premium: preview.item.premium,
+      walletCoins: wallet.coins,
+    });
+    canInteract = state.canInteract;
+    onAction = () => {
+      if (state.owned) selectTableSkin(preview.item.id);
+      else buyTableSkin(preview.item.id);
+      onClose();
+    };
+  } else if (preview.kind === "avatar") {
+    const state = getAvatarShopState(preview.item, wallet, season);
+
+    title = preview.item.title;
+    description = preview.item.description;
+    rarity = preview.item.rarity;
+    ctaLabel = getShopCtaLabel({
+      ...state,
+      premium: preview.item.premium,
+      unlockLevel: preview.item.unlockLevel,
+      walletCoins: wallet.coins,
+    });
+    canInteract = state.canInteract;
+    onAction = () => {
+      if (state.owned) selectAvatar(preview.item.id);
+      else buyAvatar(preview.item.id);
+      onClose();
+    };
+  } else {
+    const state = getAvatarFrameShopState(preview.item, wallet, season);
+
+    title = preview.item.title;
+    description = preview.item.description;
+    rarity = preview.item.rarity;
+    ctaLabel = getShopCtaLabel({
+      ...state,
+      premium: preview.item.premium,
+      unlockLevel: preview.item.unlockLevel,
+      walletCoins: wallet.coins,
+    });
+    canInteract = state.canInteract;
+    onAction = () => {
+      if (state.owned) selectAvatarFrame(preview.item.id);
+      else buyAvatarFrame(preview.item.id);
+      onClose();
+    };
+  }
+
+  return (
+    <View style={styles.modalOverlay}>
+      <GameModalFrame
+        eyebrow={rarity}
+        title={title}
+        text={description}
+        onClose={onClose}
+        frameStyle={styles.previewModalCard}
+      >
+        <View style={styles.previewStage}>
+          {preview.kind === "cardback" ? (
+            <Image
+              source={preview.item.image}
+              style={styles.previewCardBackImage}
+              resizeMode="cover"
+            />
+          ) : null}
+
+          {preview.kind === "table" ? (
+            <View style={styles.previewTable}>
+              <View
+                style={[
+                  styles.previewTableRail,
+                  {
+                    backgroundColor: preview.item.railColors[0],
+                    borderColor: preview.item.accentColor,
+                  },
+                ]}
+              />
+              <View
+                style={[
+                  styles.previewTableFelt,
+                  {
+                    backgroundColor: preview.item.feltColors[1],
+                    borderColor: preview.item.accentColor,
+                  },
+                ]}
+              />
+            </View>
+          ) : null}
+
+          {preview.kind === "avatar" ? (
+            <View
+              style={[
+                styles.previewAvatar,
+                {
+                  backgroundColor: preview.item.backgroundColor,
+                },
+              ]}
+            >
+              <Text
+                style={[
+                  styles.previewAvatarText,
+                  {
+                    color: preview.item.textColor,
+                  },
+                ]}
+              >
+                {preview.item.badge || "A"}
+              </Text>
+            </View>
+          ) : null}
+
+          {preview.kind === "frame" ? (
+            <View
+              style={[
+                styles.previewAvatar,
+                {
+                  backgroundColor: preview.item.backgroundColor,
+                  borderColor: preview.item.borderColor,
+                },
+              ]}
+            >
+              <Text style={styles.previewAvatarText}>A</Text>
+            </View>
+          ) : null}
+        </View>
+
+        <GameButton
+          label={ctaLabel}
+          onPress={onAction}
+          disabled={!canInteract}
+        />
+
+        <GameButton label="Sluit preview" onPress={onClose} tone="secondary" />
+      </GameModalFrame>
+    </View>
+  );
 }
 
 function FeaturedCardBackDeal({
@@ -1544,6 +2983,7 @@ function CardBackShopItem({
   buyCardBack,
   selectCardBack,
   hapticsEnabled,
+  onPreview,
 }: {
   cardBack: CardBackOption;
   wallet: Wallet;
@@ -1551,6 +2991,7 @@ function CardBackShopItem({
   buyCardBack: (cardBackId: string) => void;
   selectCardBack: (cardBackId: string) => void;
   hapticsEnabled: boolean;
+  onPreview: (cardBack: CardBackOption) => void;
 }) {
   const { canBuy, canInteract, levelLocked, owned, priceCoins, selected } =
     getCardBackShopState(cardBack, wallet, season);
@@ -1560,7 +3001,7 @@ function CardBackShopItem({
     : owned
     ? "Gebruik"
     : cardBack.premium
-    ? "Premium"
+    ? "Binnenkort"
     : levelLocked
     ? `Lv ${cardBack.unlockLevel}`
     : canBuy
@@ -1568,16 +3009,8 @@ function CardBackShopItem({
     : `Nog ${missingCoins}`;
 
   function handleCardBackPress() {
-    if (!canInteract) return;
-
     if (hapticsEnabled) Haptics.selectionAsync().catch(() => {});
-
-    if (owned) {
-      selectCardBack(cardBack.id);
-      return;
-    }
-
-    buyCardBack(cardBack.id);
+    onPreview(cardBack);
   }
 
   return (
@@ -1590,7 +3023,6 @@ function CardBackShopItem({
         !canInteract && styles.cardBackShopItemDisabled,
       ]}
       onPress={handleCardBackPress}
-      disabled={!canInteract}
     >
       <View style={styles.cardBackImageStage}>
         <Image
@@ -1629,6 +3061,71 @@ function CardBackShopItem({
           ]}
         >
           {ctaLabel}
+        </Text>
+      </View>
+    </Pressable>
+  );
+}
+
+function DailyMissionCard({
+  mission,
+  wallet,
+  claimDailyMission,
+}: {
+  mission: DailyMission;
+  wallet: Wallet;
+  claimDailyMission: (missionId: string) => void;
+}) {
+  const progress = Math.min(
+    getDailyMissionProgress(wallet, mission),
+    mission.target
+  );
+  const progressPercent = Math.round((progress / mission.target) * 100);
+  const claimed = wallet.dailyMissionClaims.includes(mission.id);
+  const ready = progress >= mission.target && !claimed;
+  const rewardText = [
+    mission.coins ? `+${mission.coins} coins` : null,
+    mission.gems ? `+${mission.gems} gems` : null,
+    mission.xp ? `+${mission.xp} XP` : null,
+  ]
+    .filter(Boolean)
+    .join(" / ");
+
+  return (
+    <Pressable
+      style={[
+        styles.milestoneCard,
+        styles.dailyMissionItem,
+        ready && styles.milestoneCardReady,
+        claimed && styles.milestoneCardClaimed,
+      ]}
+      onPress={() => claimDailyMission(mission.id)}
+    >
+      <View style={styles.milestoneTopRow}>
+        <View style={styles.milestoneCopy}>
+          <Text style={styles.milestoneTitle}>{mission.title}</Text>
+          <Text style={styles.milestoneText}>{mission.description}</Text>
+        </View>
+        <View style={styles.milestoneRewardPill}>
+          <Text style={styles.milestoneRewardText}>{rewardText}</Text>
+        </View>
+      </View>
+
+      <View style={styles.milestoneProgressTrack}>
+        <View
+          style={[
+            styles.milestoneProgressFill,
+            { width: `${progressPercent}%` },
+          ]}
+        />
+      </View>
+
+      <View style={styles.milestoneBottomRow}>
+        <Text style={styles.milestoneProgressText}>
+          {progress}/{mission.target}
+        </Text>
+        <Text style={styles.milestoneActionText}>
+          {claimed ? "Geclaimd" : ready ? "Claim" : "Vandaag"}
         </Text>
       </View>
     </Pressable>
