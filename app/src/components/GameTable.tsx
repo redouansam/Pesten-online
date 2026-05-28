@@ -338,8 +338,12 @@ export function GameTable({
           () => {}
         );
       }
-      showCardHint(getInvalidCardHint(room));
+      showCardHint(`Ongeldige kaart. ${getInvalidCardHint(room)}`);
       return;
+    }
+
+    if (room.hand.length === 1 && isPestCard(card)) {
+      showCardHint("Je mag niet eindigen met een pestkaart. Je pakt 2 strafkaarten.");
     }
 
     if (card.value === "J") {
@@ -415,7 +419,7 @@ export function GameTable({
               ? "Je kijkt mee"
               : isYourTurn
               ? getTurnText(room)
-              : `${currentPlayer?.name ?? "Speler"} is aan de beurt`}
+              : `Wachten op ${currentPlayer?.name ?? "speler"}`}
           </Text>
         </View>
 
@@ -1184,11 +1188,11 @@ function getTurnCoachText({
   }
 
   if (!isYourTurn) {
-    return `${currentPlayerName ?? "Speler"} is bezig.`;
+    return `Wachten op ${currentPlayerName ?? "speler"}.`;
   }
 
   if (room.pendingDraw > 0) {
-    return `+${room.pendingDraw} pakken of stapelen.`;
+    return `Pak ${room.pendingDraw} of stapel met 2/Joker.`;
   }
 
   if (room.turnState === "after_draw") {
@@ -1210,7 +1214,9 @@ function getTurnCoachText({
       return "Heer in 7: leg nog een kaart.";
     }
 
-    return "7-reeks: symbool, 7 of dezelfde waarde.";
+    return room.sevenSuit
+      ? `Alles geven: speel ${suitLabels[room.sevenSuit]}.`
+      : "Alles geven: speel hetzelfde symbool.";
   }
 
   if (room.turnState === "must_play") {
@@ -1218,7 +1224,11 @@ function getTurnCoachText({
       return "Geen vervolgkaart: pak 1 kaart.";
     }
 
-    return "Heer: leg nog een kaart.";
+    return "Heer: speel nog precies 1 kaart.";
+  }
+
+  if (room.chosenSuit) {
+    return `Symbool gekozen: ${suitLabels[room.chosenSuit]}.`;
   }
 
   if (playableCardsCount > 0) {
@@ -1260,6 +1270,10 @@ function getInvalidCardHint(room: PublicRoomState) {
   }
 
   return "Deze kaart past nu niet.";
+}
+
+function isPestCard(card: Card) {
+  return ["A", "2", "7", "8", "J", "K", "JOKER"].includes(card.value);
 }
 
 function HandCard({

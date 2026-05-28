@@ -11,7 +11,7 @@ export function WaitingRoom({
   playerId,
   isHost,
   startGame,
-  toggleReady,
+  addBot,
   leaveRoom,
   connectionState,
   retryConnection,
@@ -24,7 +24,7 @@ export function WaitingRoom({
   playerId: string;
   isHost: boolean;
   startGame: () => void;
-  toggleReady: () => void;
+  addBot: () => void;
   leaveRoom: () => void | Promise<void>;
   connectionState: ConnectionState;
   retryConnection: () => void;
@@ -33,45 +33,29 @@ export function WaitingRoom({
   clearError: () => void;
   hapticsEnabled: boolean;
 }) {
-  const me = room.players.find((player) => player.id === playerId);
   const connectedPlayers = room.players.filter((player) => player.connected);
-  const connectedGuests = connectedPlayers.filter(
-    (player) => player.id !== room.hostId
-  );
-  const readyPlayers = connectedGuests;
-  const readyCount = readyPlayers.filter((player) => player.ready).length;
-  const readyTotal = readyPlayers.length;
-  const readyPercent =
-    readyTotal === 0 ? 0 : Math.round((readyCount / readyTotal) * 100);
-
-  const guestsReady =
-    connectedGuests.length > 0 &&
-    connectedGuests.every((player) => player.ready);
+  const seatCount = room.players.length;
+  const readyPercent = Math.round((seatCount / room.maxPlayers) * 100);
   const hasEnoughPlayers = connectedPlayers.length >= 2;
 
-  const canStart = isHost && hasEnoughPlayers && guestsReady;
-  const readyPending = pendingAction === "ready";
+  const canStart = isHost && hasEnoughPlayers;
   const startPending = pendingAction === "start";
-  const readyLabel =
-    readyTotal === 0 ? "Wacht op spelers" : `${readyCount}/${readyTotal} klaar`;
   const tableStatus = !hasEnoughPlayers
     ? "Minimaal 2 spelers nodig"
     : canStart
     ? "Klaar om te starten"
-    : readyLabel;
+    : "Wachten op host";
   const actionHint = !isHost
-    ? me?.ready
-      ? "Host start zo."
-      : "Tik op klaar."
+    ? "Wachten op host."
     : canStart
-    ? "Iedereen is klaar."
+    ? "Start wanneer je wilt."
     : !hasEnoughPlayers
     ? "Deel je code."
-    : "Wacht op klaar.";
+    : "Wacht op spelers.";
 
   const slots: Array<PublicPlayer | null> = [...room.players];
 
-  while (slots.length < 4) {
+  while (slots.length < room.maxPlayers) {
     slots.push(null);
   }
 
@@ -88,11 +72,11 @@ export function WaitingRoom({
     });
   }
 
-  function handleToggleReady() {
+  function handleAddBot() {
     if (hapticsEnabled) {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
     }
-    toggleReady();
+    addBot();
   }
 
   function handleStartGame() {
@@ -126,7 +110,7 @@ export function WaitingRoom({
 
           <View style={styles.playerCountPill}>
             <Text style={styles.playerCountText}>
-              {connectedPlayers.length}/4
+              {connectedPlayers.length}/{room.maxPlayers}
             </Text>
           </View>
         </View>
@@ -165,8 +149,8 @@ export function WaitingRoom({
         {pendingAction ? (
           <View style={styles.loadingBanner}>
             <Text style={styles.loadingBannerText}>
-              {readyPending
-                ? "Klaarzetten..."
+              {pendingAction === "bot"
+                ? "Bot toevoegen..."
                 : startPending
                 ? "Game starten..."
                 : "Even verwerken..."}
@@ -184,7 +168,7 @@ export function WaitingRoom({
             </View>
             <View style={styles.lobbyOnlinePill}>
               <Text style={styles.lobbyOnlinePillText} numberOfLines={1}>
-                {connectedPlayers.length}/4 online
+                {connectedPlayers.length}/{room.maxPlayers} online
               </Text>
             </View>
           </View>
@@ -198,11 +182,11 @@ export function WaitingRoom({
           <View style={styles.playerListTitleRow}>
             <Text style={styles.playerListTitle}>Spelers</Text>
             <Text style={styles.playerListMeta}>
-              {connectedPlayers.length}/4 online
+              {connectedPlayers.length}/{room.maxPlayers} online
             </Text>
           </View>
 
-          {slots.slice(0, 4).map((player, index) => {
+          {slots.slice(0, room.maxPlayers).map((player, index) => {
             if (!player) {
               return <EmptyPlayerSlot key={`empty-${index}`} />;
             }
@@ -222,23 +206,17 @@ export function WaitingRoom({
         </View>
 
         <View style={styles.lobbyBottomPanel}>
-          {!isHost ? (
+          {isHost && room.players.length < room.maxPlayers ? (
             <Pressable
               style={[
                 styles.readyCtaButton,
-                me?.ready && styles.readyCtaButtonOn,
-                readyPending && styles.disabledButton,
+                pendingAction === "bot" && styles.disabledButton,
               ]}
-              onPress={handleToggleReady}
-              disabled={readyPending}
+              onPress={handleAddBot}
+              disabled={pendingAction === "bot"}
             >
-              <Text
-                style={[
-                  styles.readyCtaText,
-                  me?.ready && styles.readyCtaTextOn,
-                ]}
-              >
-                {readyPending ? "..." : me?.ready ? "Klaar" : "Klaar zetten"}
+              <Text style={styles.readyCtaText}>
+                {pendingAction === "bot" ? "..." : "Bot erbij"}
               </Text>
             </Pressable>
           ) : null}
@@ -253,12 +231,16 @@ export function WaitingRoom({
               disabled={!canStart || startPending}
             >
               <Text style={styles.startButtonText}>
-                {startPending ? "Start..." : "Start tafel"}
+                {startPending
+                  ? "Start..."
+                  : canStart
+                  ? "Start spel"
+                  : "Minimaal 2 spelers nodig"}
               </Text>
             </Pressable>
           ) : (
             <View style={styles.hostWaitingBox}>
-              <Text style={styles.hostWaitingText}>Host start</Text>
+              <Text style={styles.hostWaitingText}>Wachten op host</Text>
             </View>
           )}
 
@@ -321,7 +303,6 @@ function LobbyPlayerSlot({
       style={[
         styles.playerRowCard,
         !player.connected && styles.playerSlotOffline,
-        player.ready && styles.playerSlotReady,
       ]}
     >
       <View style={styles.slotAvatar}>
@@ -358,19 +339,9 @@ function LobbyPlayerSlot({
           ]}
         />
 
-        <View
-          style={[
-            styles.readyMiniBadge,
-            player.ready && styles.readyMiniBadgeOn,
-          ]}
-        >
-          <Text
-            style={[
-              styles.readyMiniBadgeText,
-              player.ready && styles.readyMiniBadgeTextOn,
-            ]}
-          >
-            {player.ready ? "Klaar" : "Wacht"}
+        <View style={styles.readyMiniBadge}>
+          <Text style={styles.readyMiniBadgeText}>
+            {player.isBot ? "Bot" : player.connected ? "Online" : "Offline"}
           </Text>
         </View>
       </View>

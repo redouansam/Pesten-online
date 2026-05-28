@@ -49,9 +49,9 @@ export const platformFeatureCards: PlatformFeatureCard[] = [
   {
     key: "matchmaking",
     title: "Online zoeken",
-    subtitle: "Open tafels straks hier",
+    subtitle: "Snel een tafel vinden",
     icon: "NL",
-    badge: "Soon",
+    badge: "Live",
     tone: "blue",
   },
   {
@@ -59,7 +59,7 @@ export const platformFeatureCards: PlatformFeatureCard[] = [
     title: "Open tafels",
     subtitle: "Publieke kamers",
     icon: "4",
-    badge: "Soon",
+    badge: "Live",
     tone: "gold",
   },
   {
@@ -158,6 +158,6 @@ export const matchmakingPreview: MatchmakingPreview = {
   region: "Nederland",
   ruleset: "Casual tafel",
   estimatedWaitSeconds: 30,
-  statusLabel: "Soon",
-  steps: ["Zoek open tafels", "Match met spelers", "Voeg leuke spelers toe"],
+  statusLabel: "Live",
+  steps: ["Zoek open tafels", "Maak tafel als nodig", "Voeg leuke spelers later toe"],
 };

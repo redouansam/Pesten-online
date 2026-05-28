@@ -1,6 +1,6 @@
 import * as Haptics from "expo-haptics";
 import { LinearGradient } from "expo-linear-gradient";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Image,
   ImageSourcePropType,
@@ -55,8 +55,6 @@ import {
   matchmakingPreview,
   platformFeatureCards,
   previewFriends,
-  publicRoomPreviews,
-  socialActions,
   type PlatformFeatureKey,
 } from "../platformFeatures";
 import type {
@@ -68,6 +66,11 @@ import type {
 import { styles } from "../styles";
 import { tableSkinOptions } from "../tableSkins";
 import type { TableSkinOption } from "../tableSkins";
+import type { PublicRoomSummary } from "../types";
+import type {
+  PlayerProfileFoundation,
+  RecentPlayer,
+} from "../profileFoundation";
 
 type SeasonProgress = {
   level: number;
@@ -246,6 +249,13 @@ export function LobbyScreen({
   setRoomCodeInput,
   createRoom,
   joinRoom,
+  quickPlay,
+  listPublicRooms,
+  joinPublicRoom,
+  publicRooms,
+  matchmakingStatus,
+  profileFoundation,
+  recentPlayers,
   connected,
   connectionState,
   pendingAction,
@@ -283,6 +293,13 @@ export function LobbyScreen({
   setRoomCodeInput: (value: string) => void;
   createRoom: () => void;
   joinRoom: () => void;
+  quickPlay: () => void;
+  listPublicRooms: () => void;
+  joinPublicRoom: (code: string) => void;
+  publicRooms: PublicRoomSummary[];
+  matchmakingStatus: string | null;
+  profileFoundation: PlayerProfileFoundation;
+  recentPlayers: RecentPlayer[];
   connected: boolean;
   connectionState: ConnectionState;
   pendingAction: string | null;
@@ -315,6 +332,7 @@ export function LobbyScreen({
 }) {
   const { width: screenWidth } = useWindowDimensions();
   const compactHome = screenWidth < 380;
+  const scrollRef = useRef<ScrollView>(null);
   const [activeTab, setActiveTab] = useState<BottomNavKey>("play");
   const [showShop, setShowShop] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -334,6 +352,9 @@ export function LobbyScreen({
   const roomCodeReady = normalizedRoomCode.length === 5;
   const creatingRoom = pendingAction === "create";
   const joiningRoom = pendingAction === "join";
+  const quickPlaying = pendingAction === "quick";
+  const listingPublicRooms = pendingAction === "listPublic";
+  const joiningPublicRoom = pendingAction === "joinPublic";
   const isBusy = pendingAction !== null;
   const profileReady = hasSavedName && name.trim().length > 0;
   const draftNameReady = draftName.trim().length > 0;
@@ -366,6 +387,18 @@ export function LobbyScreen({
     return () => clearTimeout(timer);
   }, [settingsSavedMessage]);
 
+  useEffect(() => {
+    if (activeTab !== "social" || !connected || !profileReady) return;
+
+    listPublicRooms();
+  }, [activeTab, connected, profileReady]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => scrollToTop(false), 0);
+
+    return () => clearTimeout(timer);
+  }, [activeTab]);
+
   function runLightHaptic() {
     if (!settings.hapticsEnabled) return;
 
@@ -374,8 +407,20 @@ export function LobbyScreen({
 
   function goToTab(tab: BottomNavKey) {
     Keyboard.dismiss();
-    if (activeTab !== tab) runLightHaptic();
+    if (activeTab === tab) {
+      scrollToTop(true);
+      return;
+    }
+
+    runLightHaptic();
     setActiveTab(tab);
+  }
+
+  function scrollToTop(animated: boolean) {
+    scrollRef.current?.scrollTo({
+      y: 0,
+      animated,
+    });
   }
 
   function saveProfileName() {
@@ -424,7 +469,9 @@ export function LobbyScreen({
 
   function openMatchmaking() {
     goToTab("social");
-    setShowMatchmaking(true);
+    if (!connected || isBusy || !profileReady) return;
+
+    quickPlay();
   }
 
   function openFriendsPreview() {
@@ -433,8 +480,14 @@ export function LobbyScreen({
   }
 
   function handlePlatformFeaturePress(feature: PlatformFeatureKey) {
-    if (feature === "matchmaking" || feature === "publicRooms") {
+    if (feature === "matchmaking") {
       openMatchmaking();
+      return;
+    }
+
+    if (feature === "publicRooms") {
+      goToTab("social");
+      listPublicRooms();
       return;
     }
 
@@ -467,6 +520,12 @@ export function LobbyScreen({
     joinRoom();
   }
 
+  function joinPublicTable(code: string) {
+    if (!connected || isBusy || !profileReady) return;
+
+    joinPublicRoom(code);
+  }
+
   const activeMission =
     dailyMissions.find((mission) => {
       const progress = getDailyMissionProgress(wallet, mission);
@@ -492,7 +551,7 @@ export function LobbyScreen({
     activeMissionProgress >= activeMission.target &&
     !wallet.dailyMissionClaims.includes(activeMission.id);
   const homeFeatureCards = platformFeatureCards.filter((feature) =>
-    ["matchmaking", "publicRooms", "friends"].includes(feature.key)
+    ["publicRooms", "friends"].includes(feature.key)
   );
   const tabOrder: BottomNavKey[] = ["play", "social", "shop", "rules", "profile"];
   const tabSwipeResponder = useMemo(
@@ -518,6 +577,7 @@ export function LobbyScreen({
   const lobbyContent = (
     <View style={styles.homeShell}>
       <ScrollView
+        ref={scrollRef}
         contentContainerStyle={[
           styles.homeScroll,
           compactHome && styles.homeScrollCompact,
@@ -601,6 +661,10 @@ export function LobbyScreen({
                 ? "Kamer openen..."
                 : joiningRoom
                 ? "Kamer zoeken..."
+                : quickPlaying
+                ? "Online tafel zoeken..."
+                : joiningPublicRoom
+                ? "Open tafel joinen..."
                 : "Even verwerken..."}
             </Text>
           </View>
@@ -785,6 +849,38 @@ export function LobbyScreen({
                   </Pressable>
                 </LinearGradient>
 
+                <Pressable
+                  style={[
+                    styles.homeQuickPlayCard,
+                    quickPlaying && styles.homeQuickPlayCardActive,
+                    (!connected || isBusy || !profileReady) && styles.disabledButton,
+                  ]}
+                  onPress={openMatchmaking}
+                  disabled={!connected || isBusy || !profileReady}
+                >
+                  <View style={styles.homeQuickPlayCopy}>
+                    <View style={styles.homeQuickPlayTitleRow}>
+                      <Text style={styles.homeQuickPlayTitle}>
+                        Snel online spelen
+                      </Text>
+                      <View style={styles.homeQuickPlayBadge}>
+                        <Text style={styles.homeQuickPlayBadgeText}>Live</Text>
+                      </View>
+                    </View>
+                    <Text style={styles.homeQuickPlayText}>
+                      {quickPlaying
+                        ? "Online tafel zoeken..."
+                        : matchmakingStatus ?? "Zoek automatisch een beschikbare tafel."}
+                    </Text>
+                  </View>
+
+                  <View style={styles.homeQuickPlayButton}>
+                    <Text style={styles.homeQuickPlayButtonText}>
+                      {quickPlaying ? "..." : "Snelspel"}
+                    </Text>
+                  </View>
+                </Pressable>
+
                 <View
                   style={[
                     styles.gameJoinPanel,
@@ -954,78 +1050,88 @@ export function LobbyScreen({
               <View style={styles.tabPage}>
                 <SurfaceCard subdued style={styles.tabHeroCard}>
                   <SectionHeader
-                    title="Vrienden & online"
-                    subtitle="Voorbereid voor zoeken, open tafels en invites."
+                    title="Online spelen"
+                    subtitle="Vind automatisch een tafel of sluit aan bij open tafels."
                   />
 
                   <Pressable
-                    style={styles.matchmakingStatusCard}
+                    style={[
+                      styles.matchmakingStatusCard,
+                      (quickPlaying || matchmakingStatus) && styles.milestoneCardReady,
+                    ]}
                     onPress={openMatchmaking}
+                    disabled={!connected || quickPlaying || !profileReady}
                   >
                     <View style={styles.matchmakingPulse} />
                     <View style={styles.matchmakingStatusCopy}>
                       <Text style={styles.matchmakingStatusTitle}>
-                        {matchmakingPreview.title}
+                        {quickPlaying ? "Online tafel zoeken..." : "Snelspel"}
                       </Text>
                       <Text style={styles.matchmakingStatusText}>
-                        {matchmakingPreview.region} - {matchmakingPreview.ruleset}
+                        {matchmakingStatus ??
+                          `${matchmakingPreview.region} - ${matchmakingPreview.ruleset}`}
                       </Text>
                     </View>
                     <Text style={styles.matchmakingWaitText}>
-                      {matchmakingPreview.statusLabel}
+                      {quickPlaying ? "..." : "Start"}
                     </Text>
                   </Pressable>
-                </SurfaceCard>
-
-                <SurfaceCard subdued style={styles.tabSectionCard}>
-                  <SectionHeader
-                    title="Snelle acties"
-                    subtitle="Kleine stappen, geen drukke tegels."
-                  />
-                  <View style={styles.socialActionRow}>
-                    {socialActions.map((action) => (
-                      <Pressable
-                        key={action.key}
-                        style={styles.socialActionTile}
-                        onPress={() => handlePlatformFeaturePress(action.key)}
-                      >
-                        <Text style={styles.socialActionIcon}>{action.icon}</Text>
-                        <Text style={styles.socialActionText} numberOfLines={1}>
-                          {action.label}
-                        </Text>
-                      </Pressable>
-                    ))}
-                  </View>
                 </SurfaceCard>
 
                 <SurfaceCard subdued style={styles.publicRoomPreviewList}>
                   <View style={styles.publicRoomPreviewHeader}>
                     <Text style={styles.publicRoomPreviewTitle}>Open tafels</Text>
-                    <Text style={styles.publicRoomPreviewMeta}>Preview</Text>
+                    <Pressable onPress={listPublicRooms} disabled={listingPublicRooms}>
+                      <Text style={styles.publicRoomPreviewMeta}>
+                        {listingPublicRooms ? "Laden..." : "Refresh"}
+                      </Text>
+                    </Pressable>
                   </View>
 
-                  {publicRoomPreviews.map((publicRoom) => (
+                  {publicRooms.length === 0 ? (
+                    <View style={styles.publicRoomPreviewRow}>
+                      <View style={styles.publicRoomIcon}>
+                        <Text style={styles.publicRoomIconText}>0/4</Text>
+                      </View>
+                      <View style={styles.friendPreviewCopy}>
+                        <Text style={styles.friendPreviewName}>Geen open tafels</Text>
+                        <Text style={styles.friendPreviewStatus}>
+                          Start snelspel om er een te maken.
+                        </Text>
+                      </View>
+                      <Pressable
+                        style={styles.friendPreviewButton}
+                        onPress={openMatchmaking}
+                        disabled={quickPlaying}
+                      >
+                        <Text style={styles.friendPreviewButtonText}>Snelspel</Text>
+                      </Pressable>
+                    </View>
+                  ) : null}
+
+                  {publicRooms.map((publicRoom) => (
                     <Pressable
-                      key={publicRoom.id}
+                      key={publicRoom.code}
                       style={styles.publicRoomPreviewRow}
-                      onPress={() => handlePlatformFeaturePress("publicRooms")}
+                      onPress={() => joinPublicTable(publicRoom.code)}
+                      disabled={joiningPublicRoom}
                     >
                       <View style={styles.publicRoomIcon}>
                         <Text style={styles.publicRoomIconText}>
-                          {publicRoom.seatsTaken}/{publicRoom.seatsTotal}
+                          {publicRoom.playerCount}/{publicRoom.maxPlayers}
                         </Text>
                       </View>
                       <View style={styles.friendPreviewCopy}>
                         <Text style={styles.friendPreviewName}>
-                          {publicRoom.title}
+                          {publicRoom.hostName}
                         </Text>
                         <Text style={styles.friendPreviewStatus}>
-                          {publicRoom.ruleset} - {publicRoom.region}
+                          {publicRoom.mode === "quick" ? "Snelspel" : "Casual"} - {publicRoom.region}
                         </Text>
                       </View>
                       <View style={styles.friendPreviewButton}>
                         <Text style={styles.friendPreviewButtonText}>
-                          {publicRoom.statusLabel}
+                          Join
                         </Text>
                       </View>
                     </Pressable>
@@ -1033,6 +1139,21 @@ export function LobbyScreen({
                 </SurfaceCard>
 
                 <SurfaceCard subdued style={styles.friendPreviewList}>
+                  <View style={styles.publicRoomPreviewHeader}>
+                    <View>
+                      <Text style={styles.publicRoomPreviewTitle}>Vrienden</Text>
+                      <Text style={styles.friendPreviewStatus}>
+                        Vrienden komen later met accounts.
+                      </Text>
+                    </View>
+                    <Pressable
+                      style={styles.friendPreviewButton}
+                      onPress={() => goToTab("profile")}
+                    >
+                      <Text style={styles.friendPreviewButtonText}>Profiel</Text>
+                    </Pressable>
+                  </View>
+
                   <View style={styles.socialProfileCard}>
                     <View style={styles.socialProfileLevel}>
                       <Text style={styles.socialProfileLevelText}>
@@ -1042,10 +1163,40 @@ export function LobbyScreen({
                     <View style={styles.socialProfileCopy}>
                       <Text style={styles.socialProfileName}>{displayName}</Text>
                       <Text style={styles.socialProfileText}>
-                        Profiel preview - later klikbaar voor stats en invite.
+                        Lokale stats zijn actief. Invites komen later.
                       </Text>
                     </View>
                   </View>
+
+                  {recentPlayers.length > 0 ? (
+                    <View style={styles.publicRoomPreviewHeader}>
+                      <Text style={styles.publicRoomPreviewTitle}>Recent gespeeld</Text>
+                      <Text style={styles.publicRoomPreviewMeta}>Lokaal</Text>
+                    </View>
+                  ) : null}
+
+                  {recentPlayers.map((recentPlayer) => (
+                    <View key={recentPlayer.playerId} style={styles.friendPreviewRow}>
+                      <View style={styles.friendPreviewAvatar}>
+                        <Text style={styles.friendPreviewAvatarText}>
+                          {recentPlayer.name.slice(0, 1)}
+                        </Text>
+                      </View>
+                      <View style={styles.friendPreviewCopy}>
+                        <Text style={styles.friendPreviewName}>
+                          {recentPlayer.name}
+                        </Text>
+                        <Text style={styles.friendPreviewStatus}>
+                          {recentPlayer.result === "win"
+                            ? "Laatste potje gewonnen"
+                            : "Laatste potje gespeeld"}
+                        </Text>
+                      </View>
+                      <View style={styles.friendPreviewButton}>
+                        <Text style={styles.friendPreviewButtonText}>Invite later</Text>
+                      </View>
+                    </View>
+                  ))}
 
                   {previewFriends.map((friend) => (
                     <View key={friend.name} style={styles.friendPreviewRow}>
@@ -1128,9 +1279,49 @@ export function LobbyScreen({
               <View style={styles.tabPage}>
                 <SurfaceCard subdued style={styles.tabHeroCard}>
                   <SectionHeader
-                    title="Instellingen"
-                    subtitle="Naam, haptics, kaartgrootte en taal."
+                    title="Profiel"
+                    subtitle="Stats lokaal bewaard; vrienden komen later met accounts."
                   />
+                </SurfaceCard>
+
+                <SurfaceCard subdued style={styles.friendPreviewList}>
+                  <View style={styles.socialProfileCard}>
+                    <View style={styles.socialProfileLevel}>
+                      <Text style={styles.socialProfileLevelText}>
+                        Lv {profileFoundation.level}
+                      </Text>
+                    </View>
+                    <View style={styles.socialProfileCopy}>
+                      <Text style={styles.socialProfileName}>
+                        {profileFoundation.playerName}
+                      </Text>
+                      <Text style={styles.socialProfileText}>
+                        {profileFoundation.onlineStatus === "online"
+                          ? "Online"
+                          : "Verbinding herstellen"}{" "}
+                        - {profileFoundation.xp} XP
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.gameRewardGrid}>
+                    <View style={styles.gameRewardTile}>
+                      <View style={styles.gameRewardCopy}>
+                        <Text style={styles.gameRewardTitle}>Potjes</Text>
+                        <Text style={styles.gameRewardText}>
+                          {profileFoundation.gamesPlayed}
+                        </Text>
+                      </View>
+                    </View>
+                    <View style={styles.gameRewardTile}>
+                      <View style={styles.gameRewardCopy}>
+                        <Text style={styles.gameRewardTitle}>Winst</Text>
+                        <Text style={styles.gameRewardText}>
+                          {profileFoundation.wins} / {profileFoundation.losses}
+                        </Text>
+                      </View>
+                    </View>
+                  </View>
                 </SurfaceCard>
 
                 <SurfaceCard subdued style={styles.profileSettingsCard}>
@@ -1529,7 +1720,7 @@ export function LobbyScreen({
         onSocial={openSocial}
         onPlay={() => goToTab("play")}
         shopBadge={canClaimDailyGems}
-        socialBadge
+        socialBadge={publicRooms.length > 0}
       />
     </View>
   </View>

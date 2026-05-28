@@ -1,4 +1,4 @@
-import { Card, GameRoom, Player, Suit } from "./types";
+import { Card, GameRoom, Player, RoomMode, RoomVisibility, Suit } from "./types";
 
 const suits: Suit[] = ["hearts", "diamonds", "clubs", "spades"];
 
@@ -31,13 +31,26 @@ export function generateRoomCode(existingCodes: string[]) {
   return code;
 }
 
-export function createRoom(code: string, host: Player): GameRoom {
+export function createRoom(
+  code: string,
+  host: Player,
+  options: {
+    visibility?: RoomVisibility;
+    mode?: RoomMode;
+    maxPlayers?: number;
+  } = {}
+): GameRoom {
   return {
     code,
     hostId: host.id,
     players: [host],
     started: false,
     roundId: 0,
+    visibility: options.visibility ?? "private",
+    mode: options.mode ?? "friends",
+    maxPlayers: Math.max(2, Math.min(4, options.maxPlayers ?? 4)),
+    region: "NL",
+    createdAt: Date.now(),
 
     deck: [],
     discardPile: [],
@@ -208,7 +221,6 @@ function isActiveTurnPlayer(room: GameRoom, player: Player) {
   if (room.turnState === "finished" || room.loserId) return false;
 
   return (
-    player.connected &&
     isRoundPlayer(room, player.id) &&
     !isFinishedPlayer(room, player.id)
   );
@@ -467,22 +479,13 @@ function finishRoundIfHandEmpty(room: GameRoom, playerId: string) {
   return false;
 }
 
-function penalizePestCardFinish(
-  room: GameRoom,
-  playerId: string,
-  steps: number
-) {
+function penalizePestCardFinish(room: GameRoom, playerId: string) {
   drawAmountToPlayer(room, playerId, 2);
-  room.pendingDraw = 0;
-  room.chosenSuit = undefined;
-  clearSevenChain(room);
 
   room.lastMessage = `${getPlayerName(
     room,
     playerId
   )} probeerde te eindigen met een pestkaart en pakt 2 strafkaarten.`;
-
-  moveSteps(room, steps);
 }
 
 function clearSevenChain(room: GameRoom) {
@@ -555,10 +558,10 @@ export function playCard(
   room.redrawOffer = undefined;
 
   const effect = applyCardEffect(room, card, chosenSuit);
+  const wasPestCardFinish = hand.length === 0 && isPestCard(card);
 
-  if (hand.length === 0 && isPestCard(card)) {
-    penalizePestCardFinish(room, playerId, effect.steps);
-    return;
+  if (wasPestCardFinish) {
+    penalizePestCardFinish(room, playerId);
   }
 
   if (wasMustPlayTurn && card.value === "K") {
@@ -636,6 +639,10 @@ function applyCardEffect(
 
   if (card.value === "A") {
     room.direction = room.direction === 1 ? -1 : 1;
+
+    if (getRemainingRoundPlayers(room).length === 2) {
+      steps = 2;
+    }
   }
 
   if (card.value === "8") {
@@ -1047,6 +1054,91 @@ export function sortHand(
   });
 }
 
+export function playBotTurn(room: GameRoom, botId: string) {
+  const currentPlayer = getCurrentPlayer(room);
+
+  if (!currentPlayer?.isBot || currentPlayer.id !== botId) return false;
+  if (!room.started || room.turnState === "finished") return false;
+
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const activePlayer = getCurrentPlayer(room);
+
+    if (activePlayer?.id !== botId || isRoomFinished(room)) {
+      return true;
+    }
+
+    const hand = room.hands[botId] ?? [];
+    const playableCards = hand.filter((card) => canPlayCard(room, card, botId));
+    const chosenCard = chooseBotCard(room, botId, playableCards);
+
+    if (chosenCard) {
+      const chosenSuit =
+        chosenCard.value === "J" ? chooseBotSuit(hand, chosenCard.id) : undefined;
+
+      playCard(room, botId, chosenCard.id, chosenSuit);
+      continue;
+    }
+
+    if (canDrawNow(room, botId)) {
+      drawCards(room, botId);
+      continue;
+    }
+
+    if (canPassNow(room)) {
+      passTurn(room, botId);
+      return true;
+    }
+
+    return true;
+  }
+
+  return true;
+}
+
+function isRoomFinished(room: GameRoom) {
+  return room.turnState === "finished";
+}
+
+function chooseBotCard(room: GameRoom, botId: string, playableCards: Card[]) {
+  if (playableCards.length === 0) return undefined;
+
+  const hand = room.hands[botId] ?? [];
+  const wouldEndRound = hand.length === 1;
+
+  if (room.pendingDraw > 0) {
+    return (
+      playableCards.find((card) => card.value === "JOKER") ??
+      playableCards.find((card) => card.value === "2")
+    );
+  }
+
+  const safeCards = wouldEndRound
+    ? playableCards.filter((card) => !isPestCard(card))
+    : playableCards;
+  const candidates = safeCards.length > 0 ? safeCards : playableCards;
+  const preferredOrder: Card["value"][] =
+    room.turnState === "must_play" || room.turnState === "seven_chain"
+      ? ["3", "4", "5", "6", "9", "10", "Q", "2", "JOKER", "8", "A", "J", "K", "7"]
+      : ["3", "4", "5", "6", "9", "10", "Q", "7", "K", "J", "8", "A", "2", "JOKER"];
+
+  return [...candidates].sort(
+    (cardA, cardB) =>
+      preferredOrder.indexOf(cardA.value) - preferredOrder.indexOf(cardB.value)
+  )[0];
+}
+
+function chooseBotSuit(hand: Card[], playedCardId: string): Suit {
+  const suitScores = new Map<Suit, number>();
+
+  for (const card of hand) {
+    if (!card.suit || card.id === playedCardId) continue;
+
+    suitScores.set(card.suit, (suitScores.get(card.suit) ?? 0) + 1);
+  }
+
+  return [...suitScores.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "hearts";
+}
+
 function drawAmountToPlayer(room: GameRoom, playerId: string, amount: number) {
   const hand = room.hands[playerId];
   const drawnCards: Card[] = [];
@@ -1151,6 +1243,7 @@ export function getPublicRoomState(room: GameRoom, playerId: string) {
         name: player.name,
         connected: player.connected,
         ready: player.ready,
+        isBot: player.isBot,
         cardCount: room.hands[player.id]?.length ?? 0,
         inRound,
         finished,
@@ -1160,6 +1253,12 @@ export function getPublicRoomState(room: GameRoom, playerId: string) {
     }),
     started: room.started,
     roundId: room.roundId,
+    visibility: room.visibility,
+    mode: room.mode,
+    maxPlayers: room.maxPlayers,
+    status: room.started && room.turnState !== "finished" ? "in_game" : "waiting",
+    region: room.region,
+    createdAt: room.createdAt,
 
     hand: room.hands[playerId] ?? [],
     topCard: getTopCard(room),

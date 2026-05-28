@@ -1,21 +1,32 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Platform } from "react-native";
 
-function canUseSessionStorage() {
+function canUseWebStorage() {
   return Platform.OS === "web" && typeof window !== "undefined";
 }
 
 export const sessionStore = {
   async getItem(key: string) {
-    if (canUseSessionStorage()) {
-      return window.sessionStorage.getItem(key);
+    if (canUseWebStorage()) {
+      const localValue = window.localStorage.getItem(key);
+
+      if (localValue) return localValue;
+
+      const legacySessionValue = window.sessionStorage.getItem(key);
+
+      if (legacySessionValue) {
+        window.localStorage.setItem(key, legacySessionValue);
+      }
+
+      return legacySessionValue;
     }
 
     return AsyncStorage.getItem(key);
   },
 
   async setItem(key: string, value: string) {
-    if (canUseSessionStorage()) {
+    if (canUseWebStorage()) {
+      window.localStorage.setItem(key, value);
       window.sessionStorage.setItem(key, value);
       return;
     }
@@ -24,8 +35,9 @@ export const sessionStore = {
   },
 
   async multiRemove(keys: string[]) {
-    if (canUseSessionStorage()) {
+    if (canUseWebStorage()) {
       for (const key of keys) {
+        window.localStorage.removeItem(key);
         window.sessionStorage.removeItem(key);
       }
 

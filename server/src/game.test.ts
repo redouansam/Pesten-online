@@ -7,6 +7,7 @@ import {
   getCurrentPlayer,
   getPublicRoomState,
   passTurn,
+  playBotTurn,
   playCard,
   redrawDrawnCard,
   resetToLobby,
@@ -22,6 +23,15 @@ function makePlayer(id: string): Player {
     name: `Player ${id}`,
     connected: true,
     ready: true,
+  };
+}
+
+function makeBot(id: string): Player {
+  return {
+    ...makePlayer(id),
+    socketId: "",
+    name: `Bot ${id}`,
+    isBot: true,
   };
 }
 
@@ -137,10 +147,47 @@ describe("game rules", () => {
     assert.deepEqual(room.discardPile.map((card) => card.id), ["top"]);
   });
 
-  it("penalizes illegal pest-card finishes without forwarding the draw stack", () => {
+  it("keeps a Joker/Joker/2 stack when the final 2 is an illegal finish", () => {
+    const room = makeRoom(2);
+
+    room.discardPile = [makeCard("top", "5", "hearts")];
+    room.hands["1"] = [
+      makeCard("p1-joker", "JOKER"),
+      makeCard("p1-final-2", "2", "clubs"),
+    ];
+    room.hands["2"] = [
+      makeCard("p2-joker", "JOKER"),
+      makeCard("p2-extra", "9", "diamonds"),
+    ];
+    room.deck = [
+      makeCard("penalty-1", "4", "hearts"),
+      makeCard("penalty-2", "6", "spades"),
+    ];
+
+    playCard(room, "1", "p1-joker");
+    playCard(room, "2", "p2-joker");
+    playCard(room, "1", "p1-final-2");
+
+    assert.equal(room.winnerId, undefined);
+    assert.equal(room.pendingDraw, 12);
+    assert.equal(room.hands["1"].length, 2);
+    assert.deepEqual(
+      room.hands["1"].map((card) => card.id),
+      ["penalty-1", "penalty-2"]
+    );
+    assert.equal(getCurrentPlayer(room)?.id, "2");
+
+    const publicRoom = getPublicRoomState(room, "2");
+
+    assert.equal(publicRoom.pendingDraw, 12);
+    assert.equal(publicRoom.canDraw, true);
+  });
+
+  it("adds a final 2 onto an existing pending draw instead of overwriting it", () => {
     const room = makeRoom(2);
 
     room.discardPile = [makeCard("top-2", "2", "hearts")];
+    room.pendingDraw = 10;
     room.hands["1"] = [makeCard("final-2", "2", "clubs")];
     room.deck = [
       makeCard("penalty-1", "4", "hearts"),
@@ -150,41 +197,107 @@ describe("game rules", () => {
     playCard(room, "1", "final-2");
 
     assert.equal(room.winnerId, undefined);
-    assert.equal(room.pendingDraw, 0);
+    assert.equal(room.pendingDraw, 12);
     assert.equal(room.hands["1"].length, 2);
     assert.equal(getCurrentPlayer(room)?.id, "2");
-    assert.match(room.lastMessage ?? "", /pestkaart/);
   });
 
-  it("penalizes every pest card finish with two cards", () => {
-    const pestFinalCards: Array<{
-      card: Card;
-      chosenSuit?: Suit;
-    }> = [
-      { card: makeCard("final-a", "A", "hearts") },
-      { card: makeCard("final-2", "2", "hearts") },
-      { card: makeCard("final-7", "7", "hearts") },
-      { card: makeCard("final-8", "8", "hearts") },
-      { card: makeCard("final-j", "J", "hearts"), chosenSuit: "spades" },
-      { card: makeCard("final-k", "K", "hearts") },
-      { card: makeCard("final-joker", "JOKER") },
+  it("adds a final Joker onto an existing pending draw instead of overwriting it", () => {
+    const room = makeRoom(2);
+
+    room.discardPile = [makeCard("top-2", "2", "hearts")];
+    room.pendingDraw = 4;
+    room.hands["1"] = [makeCard("final-joker", "JOKER")];
+    room.deck = [
+      makeCard("penalty-1", "4", "hearts"),
+      makeCard("penalty-2", "6", "spades"),
     ];
 
-    for (const { card, chosenSuit } of pestFinalCards) {
-      const room = makeRoom(2);
+    playCard(room, "1", "final-joker");
+
+    assert.equal(room.winnerId, undefined);
+    assert.equal(room.pendingDraw, 9);
+    assert.equal(room.hands["1"].length, 2);
+    assert.equal(getCurrentPlayer(room)?.id, "2");
+  });
+
+  it("penalizes non-draw pest-card finishes while keeping their normal effects", () => {
+    const pestFinalCards: Array<{
+      label: string;
+      card: Card;
+      chosenSuit?: Suit;
+      playerCount?: number;
+      deck?: Card[];
+      assertEffect: (room: GameRoom) => void;
+    }> = [
+      {
+        label: "Ace",
+        card: makeCard("final-a", "A", "hearts"),
+        assertEffect: (room) => {
+          assert.equal(room.direction, -1);
+          assert.equal(getCurrentPlayer(room)?.id, "1");
+        },
+      },
+      {
+        label: "Eight",
+        card: makeCard("final-8", "8", "hearts"),
+        playerCount: 3,
+        assertEffect: (room) => {
+          assert.equal(getCurrentPlayer(room)?.id, "3");
+        },
+      },
+      {
+        label: "Jack",
+        card: makeCard("final-j", "J", "hearts"),
+        chosenSuit: "spades",
+        assertEffect: (room) => {
+          assert.equal(room.chosenSuit, "spades");
+          assert.equal(getCurrentPlayer(room)?.id, "2");
+        },
+      },
+      {
+        label: "King",
+        card: makeCard("final-k", "K", "hearts"),
+        deck: [
+          makeCard("king-penalty-1", "K", "spades"),
+          makeCard("king-penalty-2", "6", "clubs"),
+        ],
+        assertEffect: (room) => {
+          assert.equal(room.turnState, "must_play");
+          assert.equal(getCurrentPlayer(room)?.id, "1");
+        },
+      },
+      {
+        label: "Seven",
+        card: makeCard("final-7", "7", "hearts"),
+        deck: [
+          makeCard("seven-penalty-1", "9", "hearts"),
+          makeCard("seven-penalty-2", "6", "clubs"),
+        ],
+        assertEffect: (room) => {
+          assert.equal(room.turnState, "seven_chain");
+          assert.equal(room.sevenSuit, "hearts");
+          assert.equal(getCurrentPlayer(room)?.id, "1");
+        },
+      },
+    ];
+
+    for (const { label, card, chosenSuit, playerCount, deck, assertEffect } of pestFinalCards) {
+      const room = makeRoom(playerCount ?? 2);
 
       room.discardPile = [makeCard("top", "5", "hearts")];
       room.hands["1"] = [card];
-      room.deck = [
-        makeCard(`${card.id}-penalty-1`, "4", "clubs"),
-        makeCard(`${card.id}-penalty-2`, "6", "spades"),
-      ];
+      room.deck =
+        deck ?? [
+          makeCard(`${card.id}-penalty-1`, "4", "clubs"),
+          makeCard(`${card.id}-penalty-2`, "6", "spades"),
+        ];
 
       playCard(room, "1", card.id, chosenSuit);
 
-      assert.equal(room.winnerId, undefined, `${card.value} should not win`);
-      assert.equal(room.hands["1"].length, 2, `${card.value} penalty`);
-      assert.match(room.lastMessage ?? "", /2 strafkaarten/);
+      assert.equal(room.winnerId, undefined, `${label} should not win`);
+      assert.equal(room.hands["1"].length, 2, `${label} penalty`);
+      assertEffect(room);
     }
   });
 
@@ -376,7 +489,22 @@ describe("game rules", () => {
     assert.equal(getCurrentPlayer(room)?.id, "2");
   });
 
-  it("reverses direction after an ace", () => {
+  it("treats an ace like a skip when only two players are active", () => {
+    const room = makeRoom(2);
+
+    room.discardPile = [makeCard("top", "5", "hearts")];
+    room.hands["1"] = [
+      makeCard("ace", "A", "hearts"),
+      makeCard("extra", "9", "clubs"),
+    ];
+
+    playCard(room, "1", "ace");
+
+    assert.equal(room.direction, -1);
+    assert.equal(getCurrentPlayer(room)?.id, "1");
+  });
+
+  it("reverses direction after an ace with three active players", () => {
     const room = makeRoom(3);
 
     room.discardPile = [makeCard("top", "5", "hearts")];
@@ -389,6 +517,23 @@ describe("game rules", () => {
 
     assert.equal(room.direction, -1);
     assert.equal(getCurrentPlayer(room)?.id, "3");
+  });
+
+  it("treats an ace like a skip when only two players remain from a larger round", () => {
+    const room = makeRoom(3);
+
+    room.finishedPlayerIds = ["2"];
+    room.discardPile = [makeCard("top", "5", "hearts")];
+    room.hands["1"] = [
+      makeCard("ace", "A", "hearts"),
+      makeCard("extra", "9", "clubs"),
+    ];
+    room.hands["3"] = [makeCard("p3-card", "9", "diamonds")];
+
+    playCard(room, "1", "ace");
+
+    assert.equal(room.direction, -1);
+    assert.equal(getCurrentPlayer(room)?.id, "1");
   });
 
   it("skips the next player after an eight", () => {
@@ -555,6 +700,98 @@ describe("game rules", () => {
     playCard(room, "1", "spade-k");
 
     assert.equal(room.turnState, "normal");
+    assert.equal(getCurrentPlayer(room)?.id, "2");
+  });
+
+  it("lets a bot stack a pending 2/Joker penalty", () => {
+    const room = makeRoom(2);
+
+    room.players[1] = makeBot("2");
+    room.discardPile = [makeCard("top-2", "2", "hearts")];
+    room.pendingDraw = 2;
+    room.currentPlayerIndex = 1;
+    room.hands["2"] = [
+      makeCard("bot-joker", "JOKER"),
+      makeCard("bot-extra", "9", "clubs"),
+    ];
+
+    assert.equal(playBotTurn(room, "2"), true);
+    assert.equal(room.pendingDraw, 7);
+    assert.equal(room.discardPile[room.discardPile.length - 1].id, "bot-joker");
+    assert.equal(getCurrentPlayer(room)?.id, "1");
+  });
+
+  it("makes a bot choose a useful suit after a Jack", () => {
+    const room = makeRoom(2);
+
+    room.players[0] = makeBot("1");
+    room.discardPile = [makeCard("top", "5", "hearts")];
+    room.hands["1"] = [
+      makeCard("bot-jack", "J", "hearts"),
+      makeCard("bot-spade-1", "9", "spades"),
+      makeCard("bot-spade-2", "4", "spades"),
+    ];
+
+    playBotTurn(room, "1");
+
+    assert.equal(room.chosenSuit, "spades");
+    assert.equal(getCurrentPlayer(room)?.id, "2");
+  });
+
+  it("makes a bot avoid ending with a pest card when it has an alternative", () => {
+    const room = makeRoom(2);
+
+    room.players[0] = makeBot("1");
+    room.discardPile = [makeCard("top", "5", "hearts")];
+    room.hands["1"] = [
+      makeCard("bot-ace", "A", "hearts"),
+      makeCard("bot-five", "5", "clubs"),
+    ];
+
+    playBotTurn(room, "1");
+
+    assert.equal(room.discardPile[room.discardPile.length - 1].id, "bot-five");
+    assert.deepEqual(
+      room.hands["1"].map((card) => card.id),
+      ["bot-ace"]
+    );
+    assert.equal(room.winnerId, undefined);
+  });
+
+  it("makes a bot handle a king extra-card turn", () => {
+    const room = makeRoom(2);
+
+    room.players[0] = makeBot("1");
+    room.discardPile = [makeCard("top", "5", "hearts")];
+    room.hands["1"] = [
+      makeCard("bot-king", "K", "hearts"),
+      makeCard("bot-king-extra", "K", "spades"),
+      makeCard("bot-extra", "9", "clubs"),
+    ];
+
+    playBotTurn(room, "1");
+
+    assert.equal(room.turnState, "normal");
+    assert.equal(room.discardPile[room.discardPile.length - 1].id, "bot-king-extra");
+    assert.equal(getCurrentPlayer(room)?.id, "2");
+  });
+
+  it("makes a bot continue a 7-chain when possible", () => {
+    const room = makeRoom(2);
+
+    room.players[0] = makeBot("1");
+    room.discardPile = [makeCard("top", "Q", "hearts")];
+    room.hands["1"] = [
+      makeCard("bot-seven", "7", "hearts"),
+      makeCard("bot-heart", "9", "hearts"),
+      makeCard("bot-extra", "5", "clubs"),
+    ];
+
+    playBotTurn(room, "1");
+
+    assert.equal(room.turnState, "normal");
+    assert.equal(room.sevenSuit, undefined);
+    assert.equal(room.discardPile[room.discardPile.length - 1].id, "bot-heart");
     assert.equal(getCurrentPlayer(room)?.id, "2");
   });
 

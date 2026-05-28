@@ -27,8 +27,14 @@ export type Player = {
   socketId: string;
   name: string;
   connected: boolean;
+  disconnectedAt?: number;
   ready: boolean;
+  isBot?: boolean;
 };
+
+export type RoomVisibility = "private" | "public";
+export type RoomMode = "friends" | "casual" | "quick";
+export type RoomStatus = "waiting" | "in_game";
 
 export type TurnState =
   | "normal"
@@ -43,6 +49,11 @@ export type GameRoom = {
   players: Player[];
   started: boolean;
   roundId: number;
+  visibility: RoomVisibility;
+  mode: RoomMode;
+  maxPlayers: number;
+  region: "NL";
+  createdAt: number;
 
   deck: Card[];
   discardPile: Card[];
@@ -77,11 +88,23 @@ export type PublicPlayer = {
   name: string;
   connected: boolean;
   ready: boolean;
+  isBot?: boolean;
   cardCount: number;
   inRound: boolean;
   finished: boolean;
   waitingForNextRound: boolean;
   rank?: number;
+};
+
+export type PublicRoomSummary = {
+  code: string;
+  hostName: string;
+  playerCount: number;
+  maxPlayers: number;
+  status: RoomStatus;
+  region: "NL";
+  mode: RoomMode;
+  createdAt: number;
 };
 
 export type PublicRoomState = {
@@ -90,6 +113,12 @@ export type PublicRoomState = {
   players: PublicPlayer[];
   started: boolean;
   roundId: number;
+  visibility: RoomVisibility;
+  mode: RoomMode;
+  maxPlayers: number;
+  status: RoomStatus;
+  region: "NL";
+  createdAt: number;
 
   hand: Card[];
   topCard?: Card;

@@ -1,7 +1,7 @@
 import express from "express";
 import cors from "cors";
 import http from "http";
-import { Server } from "socket.io";
+import { Server, Socket } from "socket.io";
 import { randomUUID } from "crypto";
 import {
   clampCurrentPlayerIndex,
@@ -10,8 +10,8 @@ import {
   generateRoomCode,
   getCurrentPlayer,
   getPublicRoomState,
-  moveToNextPlayer,
   passTurn,
+  playBotTurn,
   playCard,
   redrawDrawnCard,
   reorderHand,
@@ -19,7 +19,14 @@ import {
   sortHand,
   startGame,
 } from "./game";
-import { GameRoom, Player, Suit } from "./types";
+import {
+  GameRoom,
+  Player,
+  PublicRoomSummary,
+  RoomMode,
+  RoomVisibility,
+  Suit,
+} from "./types";
 
 const app = express();
 
@@ -37,9 +44,27 @@ const io = new Server(server, {
 const rooms = new Map<string, GameRoom>();
 const socketToRoom = new Map<string, string>();
 const socketToPlayerId = new Map<string, string>();
-const disconnectSkipTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const disconnectGraceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const botTurnTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+let reconnectGraceMs = Number(process.env.RECONNECT_GRACE_MS) || 3 * 60 * 1000;
 
 const validSuits: Suit[] = ["hearts", "diamonds", "clubs", "spades"];
+
+type SessionPayload = {
+  code?: string;
+  playerId?: string;
+  name?: string;
+};
+
+type SessionEventName = "room_created" | "room_joined" | "reconnected";
+type CreateRoomPayload = SessionPayload & {
+  visibility?: RoomVisibility;
+  mode?: RoomMode;
+};
+
+const validRoomModes: RoomMode[] = ["friends", "casual", "quick"];
+const validRoomVisibilities: RoomVisibility[] = ["private", "public"];
 
 function isValidSuit(value: unknown): value is Suit {
   return typeof value === "string" && validSuits.includes(value as Suit);
@@ -53,22 +78,304 @@ function sanitizePlayerName(name: unknown) {
   return trimmedName || "Speler";
 }
 
+function sanitizeRoomMode(value: unknown, fallback: RoomMode): RoomMode {
+  return typeof value === "string" && validRoomModes.includes(value as RoomMode)
+    ? (value as RoomMode)
+    : fallback;
+}
+
+function sanitizeRoomVisibility(
+  value: unknown,
+  fallback: RoomVisibility
+): RoomVisibility {
+  return typeof value === "string" &&
+    validRoomVisibilities.includes(value as RoomVisibility)
+    ? (value as RoomVisibility)
+    : fallback;
+}
+
 app.get("/", (_req, res) => {
   res.send("Pesten multiplayer server draait");
 });
 
+function getConnectedPlayerCount(room: GameRoom) {
+  return room.players.filter((player) => player.isBot || isConnectedHuman(player))
+    .length;
+}
+
+function getRoomStatus(room: GameRoom) {
+  return room.started && room.turnState !== "finished" ? "in_game" : "waiting";
+}
+
+function isHuman(player: Player) {
+  return !player.isBot;
+}
+
+function isConnectedHuman(player: Player) {
+  return isHuman(player) && player.connected && Boolean(player.socketId);
+}
+
+function getHumans(room: GameRoom) {
+  return room.players.filter(isHuman);
+}
+
+function getConnectedHumans(room: GameRoom) {
+  return room.players.filter(isConnectedHuman);
+}
+
+function getHost(room: GameRoom) {
+  return room.players.find((player) => player.id === room.hostId);
+}
+
+function hasConnectedHumanHost(room: GameRoom) {
+  const host = getHost(room);
+
+  return Boolean(host && isConnectedHuman(host));
+}
+
+function migrateHost(room: GameRoom) {
+  const currentHost = getHost(room);
+
+  if (currentHost && isConnectedHuman(currentHost)) {
+    return true;
+  }
+
+  const nextHumanHost = getConnectedHumans(room)[0];
+
+  if (nextHumanHost) {
+    if (room.hostId !== nextHumanHost.id) {
+      room.hostId = nextHumanHost.id;
+      room.lastMessage = `${nextHumanHost.name} is nu host.`;
+    }
+
+    return true;
+  }
+
+  const reservedHumanHost = currentHost && isHuman(currentHost)
+    ? currentHost
+    : getHumans(room)[0];
+
+  if (reservedHumanHost) {
+    room.hostId = reservedHumanHost.id;
+  }
+
+  return false;
+}
+
+function clearBotTurn(roomCode: string) {
+  const timer = botTurnTimers.get(roomCode);
+
+  if (!timer) return;
+
+  clearTimeout(timer);
+  botTurnTimers.delete(roomCode);
+}
+
+function closeRoom(
+  roomCode: string,
+  reason: string,
+  message = "Tafel gesloten omdat er niet genoeg spelers over zijn."
+) {
+  const room = rooms.get(roomCode);
+
+  if (!room) return false;
+
+  clearBotTurn(roomCode);
+
+  const notifiedSockets = new Set<string>();
+
+  for (const player of room.players) {
+    clearDisconnectGrace(player.id);
+
+    if (!player.socketId) continue;
+
+    notifiedSockets.add(player.socketId);
+    io.to(player.socketId).emit("room_closed", {
+      code: roomCode,
+      reason,
+      message,
+    });
+    socketToRoom.delete(player.socketId);
+    socketToPlayerId.delete(player.socketId);
+    io.sockets.sockets.get(player.socketId)?.leave(roomCode);
+  }
+
+  for (const [socketId, mappedRoomCode] of socketToRoom) {
+    if (mappedRoomCode !== roomCode) continue;
+
+    if (!notifiedSockets.has(socketId)) {
+      io.to(socketId).emit("room_closed", {
+        code: roomCode,
+        reason,
+        message,
+      });
+    }
+
+    socketToRoom.delete(socketId);
+    socketToPlayerId.delete(socketId);
+    io.sockets.sockets.get(socketId)?.leave(roomCode);
+  }
+
+  rooms.delete(roomCode);
+  console.log(`Kamer ${roomCode} gesloten (${reason})`);
+
+  return true;
+}
+
+function remainingRoundPlayerCount(room: GameRoom) {
+  return room.players.filter(
+    (player) =>
+      room.roundPlayerIds.includes(player.id) &&
+      !room.finishedPlayerIds.includes(player.id)
+  ).length;
+}
+
+function abortActiveGameToLobby(room: GameRoom, message: string) {
+  resetToLobby(room);
+  room.lastMessage = message;
+  migrateHost(room);
+}
+
+function validateRoomInvariant(roomCode: string) {
+  const room = rooms.get(roomCode);
+
+  if (!room) return false;
+
+  if (getHumans(room).length === 0) {
+    closeRoom(roomCode, "bot_only");
+    return false;
+  }
+
+  migrateHost(room);
+
+  const host = getHost(room);
+
+  if (!host || host.isBot) {
+    closeRoom(roomCode, "invalid_host");
+    return false;
+  }
+
+  if (
+    room.started &&
+    room.turnState !== "finished" &&
+    room.roundPlayerIds.length > 0 &&
+    remainingRoundPlayerCount(room) < 2
+  ) {
+    abortActiveGameToLobby(
+      room,
+      "Tafel teruggezet omdat er niet genoeg spelers over zijn."
+    );
+  }
+
+  return true;
+}
+
+function isPublicWaitingRoom(room: GameRoom) {
+  return (
+    room.visibility === "public" &&
+    !room.started &&
+    room.turnState !== "finished" &&
+    hasConnectedHumanHost(room) &&
+    getConnectedHumans(room).length > 0 &&
+    room.players.length < room.maxPlayers
+  );
+}
+
+function getPublicRoomSummary(room: GameRoom): PublicRoomSummary {
+  return {
+    code: room.code,
+    hostName:
+      room.players.find((player) => player.id === room.hostId)?.name ?? "Speler",
+    playerCount: getConnectedPlayerCount(room),
+    maxPlayers: room.maxPlayers,
+    status: getRoomStatus(room),
+    region: room.region,
+    mode: room.mode,
+    createdAt: room.createdAt,
+  };
+}
+
+function getPublicRooms() {
+  for (const roomCode of [...rooms.keys()]) {
+    validateRoomInvariant(roomCode);
+  }
+
+  return [...rooms.values()]
+    .filter(isPublicWaitingRoom)
+    .sort((roomA, roomB) => roomA.createdAt - roomB.createdAt)
+    .map(getPublicRoomSummary);
+}
+
+function emitPublicRooms(socket: Socket) {
+  socket.emit("public_rooms", getPublicRooms());
+}
+
+function scheduleBotTurn(roomCode: string) {
+  if (botTurnTimers.has(roomCode)) return;
+
+  if (!validateRoomInvariant(roomCode)) return;
+
+  const room = rooms.get(roomCode);
+  const currentPlayer = room ? getCurrentPlayer(room) : undefined;
+
+  if (
+    !room ||
+    getConnectedHumans(room).length === 0 ||
+    !currentPlayer?.isBot ||
+    !room.started ||
+    room.turnState === "finished"
+  ) {
+    return;
+  }
+
+  const timer = setTimeout(() => {
+    botTurnTimers.delete(roomCode);
+
+    const latestRoom = rooms.get(roomCode);
+    const bot = latestRoom ? getCurrentPlayer(latestRoom) : undefined;
+
+    if (
+      !validateRoomInvariant(roomCode) ||
+      !latestRoom ||
+      getConnectedHumans(latestRoom).length === 0 ||
+      !bot?.isBot ||
+      !latestRoom.started ||
+      latestRoom.turnState === "finished"
+    ) {
+      return;
+    }
+
+    try {
+      playBotTurn(latestRoom, bot.id);
+      sendRoomUpdate(roomCode);
+    } catch (error) {
+      latestRoom.lastMessage = `${bot.name} kon geen zet doen.`;
+      console.warn(
+        `Bot zet mislukt in ${roomCode}:`,
+        error instanceof Error ? error.message : error
+      );
+      sendRoomUpdate(roomCode);
+    }
+  }, 650);
+
+  timer.unref?.();
+  botTurnTimers.set(roomCode, timer);
+}
+
 function sendRoomUpdate(roomCode: string) {
+  if (!validateRoomInvariant(roomCode)) return;
+
   const room = rooms.get(roomCode);
 
   if (!room) return;
-
-  assignNewHostIfNeeded(room);
 
   for (const player of room.players) {
     if (!player.socketId) continue;
 
     io.to(player.socketId).emit("room_updated", getPublicRoomState(room, player.id));
   }
+
+  scheduleBotTurn(roomCode);
 }
 
 function findRoomByPlayerId(playerId: string) {
@@ -84,18 +391,6 @@ function findRoomByPlayerId(playerId: string) {
   }
 
   return null;
-}
-
-function assignNewHostIfNeeded(room: GameRoom) {
-  const host = room.players.find((player) => player.id === room.hostId);
-
-  if (host?.connected) return;
-
-  const nextHost = room.players.find((player) => player.connected);
-
-  if (nextHost) {
-    room.hostId = nextHost.id;
-  }
 }
 
 function clearForcedTurnState(room: GameRoom, message?: string) {
@@ -118,106 +413,59 @@ function clearForcedTurnState(room: GameRoom, message?: string) {
   return true;
 }
 
-function skipDisconnectedCurrentPlayer(room: GameRoom) {
-  if (!room.started || room.turnState === "finished") return;
-
-  let attempts = 0;
-
-  while (
-    getCurrentPlayer(room) &&
-    !getCurrentPlayer(room).connected &&
-    attempts < room.players.length
-  ) {
-    const skippedPlayer = getCurrentPlayer(room);
-
-    clearForcedTurnState(
-      room,
-      `${skippedPlayer?.name ?? "Een speler"} is offline; de beurt gaat door.`
-    );
-
-    moveToNextPlayer(room);
-    attempts++;
-  }
-}
-
 function scheduleRoomCleanup(roomCode: string) {
-  setTimeout(() => {
+  const timer = setTimeout(() => {
     const room = rooms.get(roomCode);
 
     if (!room) return;
 
-    const hasConnectedPlayers = room.players.some((player) => player.connected);
+    const hasConnectedHumans = getConnectedHumans(room).length > 0;
 
-    if (!hasConnectedPlayers) {
-      rooms.delete(roomCode);
-      console.log(`Kamer ${roomCode} verwijderd omdat iedereen offline is`);
+    if (!hasConnectedHumans && getHumans(room).length === 0) {
+      closeRoom(roomCode, "no_humans");
+      return;
+    }
+
+    if (!hasConnectedHumans && getHumans(room).every((player) => !player.connected)) {
+      console.log(`Kamer ${roomCode} wacht nog op reconnect van menselijke spelers`);
     }
   }, 10 * 60 * 1000);
+
+  timer.unref?.();
 }
 
-function clearDisconnectSkip(playerId: string) {
-  const timer = disconnectSkipTimers.get(playerId);
+function clearDisconnectGrace(playerId: string) {
+  const timer = disconnectGraceTimers.get(playerId);
 
   if (!timer) return;
 
   clearTimeout(timer);
-  disconnectSkipTimers.delete(playerId);
+  disconnectGraceTimers.delete(playerId);
 }
 
-function scheduleDisconnectSkip(roomCode: string, playerId: string) {
-  clearDisconnectSkip(playerId);
+function scheduleDisconnectGrace(roomCode: string, playerId: string) {
+  clearDisconnectGrace(playerId);
 
   const timer = setTimeout(() => {
-    disconnectSkipTimers.delete(playerId);
+    disconnectGraceTimers.delete(playerId);
 
     const room = rooms.get(roomCode);
 
-    if (!room || !room.started || room.turnState === "finished") return;
+    if (!room) return;
 
     const player = room.players.find((item) => item.id === playerId);
 
     if (!player || player.connected) return;
 
-    const currentPlayer = getCurrentPlayer(room);
-
-    if (currentPlayer?.id !== playerId) return;
-
-    clearForcedTurnState(
-      room,
-      `${player.name} is offline; de beurt gaat door.`
+    console.log(
+      `${player.name} (${player.id}) niet terug binnen grace; verwijderen uit ${roomCode}`
     );
-    moveToNextPlayer(room);
-    sendRoomUpdate(roomCode);
-  }, 15 * 1000);
+    removePlayerFromRoom(roomCode, playerId);
+  }, reconnectGraceMs);
 
-  disconnectSkipTimers.set(playerId, timer);
-}
+  timer.unref?.();
 
-function finishRoundIfOnePlayerLeft(room: GameRoom) {
-  if (!room.started || room.turnState === "finished") return false;
-
-  const remainingPlayers = room.players.filter(
-    (player) =>
-      room.roundPlayerIds.includes(player.id) &&
-      !room.finishedPlayerIds.includes(player.id)
-  );
-
-  if (remainingPlayers.length > 1) return false;
-
-  const loser = remainingPlayers[0];
-
-  room.loserId = loser?.id;
-  room.turnState = "finished";
-  room.pendingDraw = 0;
-  room.chosenSuit = undefined;
-  room.sevenSuit = undefined;
-  room.sevenStopAfterNext = false;
-  room.redrawOffer = undefined;
-  room.lastMessage = loser
-    ? `${loser.name} blijft als laatste over.`
-    : "De ronde is klaar.";
-
-  return true;
+  disconnectGraceTimers.set(playerId, timer);
 }
 
 function removePlayerFromRoom(roomCode: string, playerId: string) {
@@ -230,7 +478,7 @@ function removePlayerFromRoom(roomCode: string, playerId: string) {
   const leavingWasCurrentPlayer = currentPlayerBeforeLeave?.id === playerId;
 
   room.players = room.players.filter((player) => player.id !== playerId);
-  clearDisconnectSkip(playerId);
+  clearDisconnectGrace(playerId);
   delete room.hands[playerId];
   delete room.rematchVotes[playerId];
   room.roundPlayerIds = room.roundPlayerIds.filter((id) => id !== playerId);
@@ -245,7 +493,7 @@ function removePlayerFromRoom(roomCode: string, playerId: string) {
   }
 
   if (room.players.length === 0) {
-    rooms.delete(roomCode);
+    closeRoom(roomCode, "empty");
     return;
   }
 
@@ -266,58 +514,165 @@ function removePlayerFromRoom(roomCode: string, playerId: string) {
       `${leavingPlayer?.name ?? "Een speler"} heeft de kamer verlaten; de beurt gaat door.`
     );
 
-  assignNewHostIfNeeded(room);
-  const finishedRound = finishRoundIfOnePlayerLeft(room);
+  const messageBeforeValidation = room.lastMessage;
 
-  if (!finishedRound) {
-    skipDisconnectedCurrentPlayer(room);
-  }
+  validateRoomInvariant(roomCode);
 
-  if (!clearedForcedTurn && !finishedRound) {
+  if (!rooms.has(roomCode)) return;
+
+  if (!clearedForcedTurn && room.lastMessage === messageBeforeValidation) {
     room.lastMessage = `${leavingPlayer?.name ?? "Een speler"} heeft de kamer verlaten.`;
   }
 
   sendRoomUpdate(roomCode);
 }
 
-function createPlayer(socketId: string, name: string): Player {
+function createPlayer(socketId: string, name: string, isBot = false): Player {
   return {
     id: randomUUID(),
     socketId,
     name,
     connected: true,
-    ready: false,
+    ready: true,
+    isBot,
   };
+}
+
+function attachPlayerSocket(
+  socket: Socket,
+  roomCode: string,
+  room: GameRoom,
+  player: Player,
+  eventName: SessionEventName,
+  name?: string
+) {
+  const previousSocketId = player.socketId;
+
+  if (previousSocketId && previousSocketId !== socket.id) {
+    socketToRoom.delete(previousSocketId);
+    socketToPlayerId.delete(previousSocketId);
+    io.sockets.sockets.get(previousSocketId)?.leave(roomCode);
+  }
+
+  if (!room.started && name) {
+    player.name = sanitizePlayerName(name);
+  }
+
+  player.socketId = socket.id;
+  player.connected = true;
+  player.disconnectedAt = undefined;
+  clearDisconnectGrace(player.id);
+
+  socketToRoom.set(socket.id, roomCode);
+  socketToPlayerId.set(socket.id, player.id);
+  socket.join(roomCode);
+
+  migrateHost(room);
+
+  socket.emit(eventName, {
+    code: roomCode,
+    playerId: player.id,
+  });
+  socket.emit("room_state", getPublicRoomState(room, player.id));
+
+  room.lastMessage =
+    eventName === "reconnected"
+      ? `${player.name} is terug verbonden.`
+      : room.lastMessage;
+
+  sendRoomUpdate(roomCode);
+}
+
+function recoverExistingPlayer(socket: Socket, payload: SessionPayload) {
+  if (!payload.playerId) return false;
+
+  const roomCode = payload.code?.trim().toUpperCase();
+  const found = roomCode
+    ? (() => {
+        const room = rooms.get(roomCode);
+        const player = room?.players.find((item) => item.id === payload.playerId);
+
+        return room && player ? { room, player } : null;
+      })()
+    : findRoomByPlayerId(payload.playerId);
+
+  if (!found) return false;
+
+  attachPlayerSocket(
+    socket,
+    found.room.code,
+    found.room,
+    found.player,
+    "reconnected",
+    payload.name
+  );
+
+  console.log(
+    `${found.player.name} herstelde sessie in kamer ${found.room.code}`
+  );
+
+  return true;
 }
 
 io.on("connection", (socket) => {
   console.log("Speler verbonden:", socket.id);
 
-  socket.on("create_room", ({ name }: { name: string }) => {
+  socket.on("create_room", ({ name, playerId, visibility, mode }: CreateRoomPayload) => {
+    if (recoverExistingPlayer(socket, { playerId, name })) return;
+
+    const existingRoomCode = socketToRoom.get(socket.id);
+    const existingPlayerId = socketToPlayerId.get(socket.id);
+    const existingRoom = existingRoomCode ? rooms.get(existingRoomCode) : undefined;
+    const existingPlayer = existingRoom?.players.find(
+      (player) => player.id === existingPlayerId
+    );
+
+    if (existingRoom && existingPlayer) {
+      attachPlayerSocket(
+        socket,
+        existingRoom.code,
+        existingRoom,
+        existingPlayer,
+        "room_created",
+        name
+      );
+      return;
+    }
+
     const playerName = sanitizePlayerName(name);
     const code = generateRoomCode([...rooms.keys()]);
     const player = createPlayer(socket.id, playerName);
+    const roomVisibility = sanitizeRoomVisibility(visibility, "private");
+    const roomMode = sanitizeRoomMode(
+      mode,
+      roomVisibility === "public" ? "casual" : "friends"
+    );
 
-    const room = createRoom(code, player);
-
-    rooms.set(code, room);
-    socketToRoom.set(socket.id, code);
-    socketToPlayerId.set(socket.id, player.id);
-    socket.join(code);
-
-    console.log(`${playerName} maakte kamer ${code}`);
-
-    socket.emit("room_created", {
-      code,
-      playerId: player.id,
+    const room = createRoom(code, player, {
+      visibility: roomVisibility,
+      mode: roomMode,
+      maxPlayers: 4,
     });
 
-    sendRoomUpdate(code);
+    rooms.set(code, room);
+
+    console.log(`${playerName} maakte kamer ${code}`);
+    attachPlayerSocket(socket, code, room, player, "room_created");
   });
 
-  socket.on("join_room", ({ code, name }: { code: string; name: string }) => {
+  socket.on("join_room", ({ code, name, playerId }: SessionPayload) => {
     const roomCode = code?.trim().toUpperCase();
     const playerName = sanitizePlayerName(name);
+
+    if (!roomCode) {
+      socket.emit("error_message", "Kamer bestaat niet");
+      return;
+    }
+
+    if (!validateRoomInvariant(roomCode)) {
+      socket.emit("error_message", "Kamer bestaat niet");
+      return;
+    }
 
     const room = rooms.get(roomCode);
 
@@ -326,7 +681,43 @@ io.on("connection", (socket) => {
       return;
     }
 
-    if (room.players.length >= 4) {
+    const reconnectingPlayer = playerId
+      ? room.players.find((item) => item.id === playerId)
+      : undefined;
+
+    if (reconnectingPlayer) {
+      attachPlayerSocket(
+        socket,
+        roomCode,
+        room,
+        reconnectingPlayer,
+        "room_joined",
+        playerName
+      );
+      console.log(`${reconnectingPlayer.name} herstelde join in kamer ${roomCode}`);
+      return;
+    }
+
+    const existingRoomCode = socketToRoom.get(socket.id);
+    const existingPlayerId = socketToPlayerId.get(socket.id);
+    const existingPlayer =
+      existingRoomCode === roomCode
+        ? room.players.find((item) => item.id === existingPlayerId)
+        : undefined;
+
+    if (existingPlayer) {
+      attachPlayerSocket(
+        socket,
+        roomCode,
+        room,
+        existingPlayer,
+        "room_joined",
+        playerName
+      );
+      return;
+    }
+
+    if (room.players.length >= room.maxPlayers) {
       socket.emit("error_message", "Deze kamer zit vol");
       return;
     }
@@ -335,21 +726,155 @@ io.on("connection", (socket) => {
 
     room.players.push(player);
 
-    socketToRoom.set(socket.id, roomCode);
-    socketToPlayerId.set(socket.id, player.id);
-    socket.join(roomCode);
-
     console.log(`${playerName} joined kamer ${roomCode}`);
 
     if (room.started && room.turnState !== "finished") {
       room.lastMessage = `${playerName} kijkt mee en doet de volgende ronde mee.`;
     }
 
-    socket.emit("room_joined", {
-      code: roomCode,
-      playerId: player.id,
+    attachPlayerSocket(socket, roomCode, room, player, "room_joined");
+  });
+
+  socket.on("list_public_rooms", () => {
+    emitPublicRooms(socket);
+  });
+
+  socket.on("join_public_room", ({ code, name, playerId }: SessionPayload) => {
+    const roomCode = code?.trim().toUpperCase();
+    const playerName = sanitizePlayerName(name);
+
+    if (!roomCode) {
+      socket.emit("error_message", "Open tafel bestaat niet");
+      return;
+    }
+
+    if (!validateRoomInvariant(roomCode)) {
+      socket.emit("error_message", "Open tafel bestaat niet");
+      emitPublicRooms(socket);
+      return;
+    }
+
+    const room = rooms.get(roomCode);
+
+    if (!room || room.visibility !== "public") {
+      socket.emit("error_message", "Open tafel bestaat niet");
+      emitPublicRooms(socket);
+      return;
+    }
+
+    if (!isPublicWaitingRoom(room)) {
+      socket.emit("error_message", "Deze open tafel is niet meer beschikbaar");
+      emitPublicRooms(socket);
+      return;
+    }
+
+    const reconnectingPlayer = playerId
+      ? room.players.find((item) => item.id === playerId)
+      : undefined;
+
+    if (reconnectingPlayer) {
+      attachPlayerSocket(
+        socket,
+        roomCode,
+        room,
+        reconnectingPlayer,
+        "room_joined",
+        playerName
+      );
+      emitPublicRooms(socket);
+      return;
+    }
+
+    const player = createPlayer(socket.id, playerName);
+
+    room.players.push(player);
+    room.lastMessage = `${playerName} schoof aan via open tafels.`;
+
+    attachPlayerSocket(socket, roomCode, room, player, "room_joined");
+    emitPublicRooms(socket);
+  });
+
+  socket.on("quick_play", ({ name, playerId }: SessionPayload) => {
+    if (recoverExistingPlayer(socket, { playerId, name })) {
+      socket.emit("quick_play_result", { status: "recovered" });
+      return;
+    }
+
+    const playerName = sanitizePlayerName(name);
+    for (const roomCode of [...rooms.keys()]) {
+      validateRoomInvariant(roomCode);
+    }
+
+    const availableRoom = [...rooms.values()].find(isPublicWaitingRoom);
+
+    if (availableRoom) {
+      const player = createPlayer(socket.id, playerName);
+
+      availableRoom.players.push(player);
+      availableRoom.lastMessage = `${playerName} vond deze open tafel.`;
+      socket.emit("quick_play_result", {
+        status: "found",
+        code: availableRoom.code,
+      });
+      attachPlayerSocket(
+        socket,
+        availableRoom.code,
+        availableRoom,
+        player,
+        "room_joined"
+      );
+      emitPublicRooms(socket);
+      return;
+    }
+
+    const code = generateRoomCode([...rooms.keys()]);
+    const player = createPlayer(socket.id, playerName);
+    const room = createRoom(code, player, {
+      visibility: "public",
+      mode: "quick",
+      maxPlayers: 4,
     });
 
+    room.lastMessage = "Open snelspel-tafel gemaakt.";
+    rooms.set(code, room);
+
+    socket.emit("quick_play_result", {
+      status: "created",
+      code,
+    });
+    console.log(`${playerName} maakte snelspel kamer ${code}`);
+    attachPlayerSocket(socket, code, room, player, "room_created");
+    emitPublicRooms(socket);
+  });
+
+  socket.on("add_bot", ({ name }: { name?: string } = {}) => {
+    const roomCode = socketToRoom.get(socket.id);
+    const playerId = socketToPlayerId.get(socket.id);
+
+    if (!roomCode || !playerId) return;
+
+    const room = rooms.get(roomCode);
+
+    if (!room || room.started) return;
+
+    if (!validateRoomInvariant(roomCode) || !rooms.has(roomCode)) return;
+
+    if (room.hostId !== playerId) {
+      socket.emit("error_message", "Alleen de host kan een bot toevoegen");
+      return;
+    }
+
+    if (room.players.length >= room.maxPlayers) {
+      socket.emit("error_message", "Deze tafel zit vol");
+      return;
+    }
+
+    const botNumber = room.players.filter((player) => player.isBot).length + 1;
+    const bot = createPlayer("", sanitizePlayerName(name ?? `Bot ${botNumber}`), true);
+
+    bot.id = `bot-${randomUUID()}`;
+    room.players.push(bot);
+    room.lastMessage = `${bot.name} is aangeschoven voor testspel.`;
     sendRoomUpdate(roomCode);
   });
 
@@ -374,7 +899,7 @@ io.on("connection", (socket) => {
 
   socket.on(
     "reconnect_room",
-    ({ code, playerId }: { code?: string; playerId?: string }) => {
+    ({ code, playerId, name }: SessionPayload) => {
       if (!code || !playerId) return;
 
       const roomCode = code.trim().toUpperCase();
@@ -392,25 +917,16 @@ io.on("connection", (socket) => {
         return;
       }
 
-      player.socketId = socket.id;
-      player.connected = true;
-      clearDisconnectSkip(player.id);
-
-      socketToRoom.set(socket.id, roomCode);
-      socketToPlayerId.set(socket.id, player.id);
-      socket.join(roomCode);
-
-      room.lastMessage = `${player.name} is terug verbonden.`;
-
-      socket.emit("reconnected", {
-        code: roomCode,
-        playerId: player.id,
-      });
-
-      assignNewHostIfNeeded(room);
-      sendRoomUpdate(roomCode);
+      attachPlayerSocket(socket, roomCode, room, player, "reconnected", name);
+      console.log(`${player.name} reconnect in kamer ${roomCode}`);
     }
   );
+
+  socket.on("recover_session", (payload: SessionPayload) => {
+    if (!recoverExistingPlayer(socket, payload)) {
+      socket.emit("reconnect_failed");
+    }
+  });
 
   socket.on("toggle_ready", () => {
     const roomCode = socketToRoom.get(socket.id);
@@ -437,28 +953,23 @@ io.on("connection", (socket) => {
 
     if (!roomCode || !playerId) return;
 
+    if (!validateRoomInvariant(roomCode)) return;
+
     const room = rooms.get(roomCode);
 
     if (!room) return;
 
-    if (room.hostId !== playerId) {
+    if (!hasConnectedHumanHost(room) || room.hostId !== playerId) {
       socket.emit("error_message", "Alleen de host kan starten");
       return;
     }
 
-    const connectedPlayers = room.players.filter((player) => player.connected);
-    const connectedGuests = connectedPlayers.filter(
-      (player) => player.id !== room.hostId
+    const connectedPlayers = room.players.filter(
+      (player) => player.isBot || isConnectedHuman(player)
     );
-    const allGuestsReady = connectedGuests.every((player) => player.ready);
 
     if (connectedPlayers.length < 2) {
       socket.emit("error_message", "Je hebt minimaal 2 spelers nodig");
-      return;
-    }
-
-    if (!allGuestsReady) {
-      socket.emit("error_message", "Alle gasten moeten eerst klaar zijn");
       return;
     }
 
@@ -679,19 +1190,20 @@ io.on("connection", (socket) => {
 
     if (player) {
       player.connected = false;
-      player.ready = false;
       player.socketId = "";
+      player.disconnectedAt = Date.now();
       room.lastMessage = `${player.name} is offline gegaan.`;
     }
 
     socketToRoom.delete(socket.id);
     socketToPlayerId.delete(socket.id);
 
-    assignNewHostIfNeeded(room);
-    scheduleDisconnectSkip(roomCode, playerId);
+    scheduleDisconnectGrace(roomCode, playerId);
     scheduleRoomCleanup(roomCode);
 
-    console.log("Speler weg:", socket.id);
+    console.log(
+      `Speler tijdelijk weg: ${playerId} uit ${roomCode}, grace ${reconnectGraceMs}ms`
+    );
 
     sendRoomUpdate(roomCode);
   });
@@ -699,6 +1211,34 @@ io.on("connection", (socket) => {
 
 const PORT = Number(process.env.PORT) || 3001;
 
-server.listen(PORT, "0.0.0.0", () => {
-  console.log(`Server draait op poort ${PORT}`);
-});
+export function resetServerStateForTests() {
+  for (const timer of disconnectGraceTimers.values()) {
+    clearTimeout(timer);
+  }
+
+  for (const timer of botTurnTimers.values()) {
+    clearTimeout(timer);
+  }
+
+  disconnectGraceTimers.clear();
+  botTurnTimers.clear();
+  rooms.clear();
+  socketToRoom.clear();
+  socketToPlayerId.clear();
+}
+
+export function setReconnectGraceMsForTests(ms: number) {
+  reconnectGraceMs = ms;
+}
+
+export function getRoomForTests(code: string) {
+  return rooms.get(code);
+}
+
+export { app, io, server };
+
+if (require.main === module) {
+  server.listen(PORT, "0.0.0.0", () => {
+    console.log(`Server draait op poort ${PORT}`);
+  });
+}

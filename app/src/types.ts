@@ -29,16 +29,32 @@ export type TurnState =
   | "seven_chain"
   | "finished";
 
+export type RoomVisibility = "private" | "public";
+export type RoomMode = "friends" | "casual" | "quick";
+export type RoomStatus = "waiting" | "in_game";
+
 export type PublicPlayer = {
   id: string;
   name: string;
   connected: boolean;
   ready: boolean;
+  isBot?: boolean;
   cardCount: number;
   inRound: boolean;
   finished: boolean;
   waitingForNextRound: boolean;
   rank?: number;
+};
+
+export type PublicRoomSummary = {
+  code: string;
+  hostName: string;
+  playerCount: number;
+  maxPlayers: number;
+  status: RoomStatus;
+  region: "NL";
+  mode: RoomMode;
+  createdAt: number;
 };
 
 export type PublicRoomState = {
@@ -47,6 +63,12 @@ export type PublicRoomState = {
   players: PublicPlayer[];
   started: boolean;
   roundId: number;
+  visibility: RoomVisibility;
+  mode: RoomMode;
+  maxPlayers: number;
+  status: RoomStatus;
+  region: "NL";
+  createdAt: number;
 
   hand: Card[];
   topCard?: Card;

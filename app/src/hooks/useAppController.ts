@@ -1,9 +1,15 @@
-import { useEffect, useRef } from "react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Animated, Keyboard } from "react-native";
 
 import { getCardBackImage } from "../cardBackImages";
 import { getAvatarFrameOption, getAvatarOption } from "../cosmetics";
 import { MATCH_ENTRY_COINS, REDRAW_COST_GEMS } from "../economy";
+import {
+  RECENT_PLAYERS_STORAGE_KEY,
+  RecentPlayer,
+  buildProfileFoundation,
+} from "../profileFoundation";
 import { useAppSettings } from "../settings";
 import { getTableSkinOption } from "../tableSkins";
 import type { Card, Suit } from "../types";
@@ -22,13 +28,18 @@ export function useAppController() {
     roomCodeInput,
     setRoomCodeInput,
     room,
+    publicRooms,
+    matchmakingStatus,
     pendingAction,
     errorMessage,
     clearError,
     retryConnection,
     createRoom,
     joinRoom,
-    toggleReady,
+    quickPlay,
+    listPublicRooms,
+    joinPublicRoom,
+    addBot,
     startGame,
     leaveRoom,
     playCard,
@@ -83,6 +94,19 @@ export function useAppController() {
   const selectedTableSkin = getTableSkinOption(wallet.selectedTableSkinId);
   const selectedAvatar = getAvatarOption(wallet.selectedAvatarId);
   const selectedAvatarFrame = getAvatarFrameOption(wallet.selectedAvatarFrameId);
+  const [recentPlayers, setRecentPlayers] = useState<RecentPlayer[]>([]);
+  const recentRoundRef = useRef<string | null>(null);
+  const profileFoundation = useMemo(
+    () =>
+      buildProfileFoundation({
+        connected,
+        level: season.level,
+        name,
+        playerId,
+        wallet,
+      }),
+    [connected, name, playerId, season.level, wallet]
+  );
 
   useEffect(() => {
     screenAnim.setValue(0);
@@ -130,6 +154,65 @@ export function useAppController() {
     playerId,
     recordGameResult,
     room?.code,
+    room?.roundId,
+    room?.turnState,
+    room?.winnerId,
+  ]);
+
+  useEffect(() => {
+    AsyncStorage.getItem(RECENT_PLAYERS_STORAGE_KEY)
+      .then((stored) => {
+        if (!stored) return;
+
+        setRecentPlayers(JSON.parse(stored) as RecentPlayer[]);
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!room?.winnerId || room.turnState !== "finished" || !room.roundId) return;
+
+    const roundKey = `${room.code}-${room.roundId}`;
+
+    if (recentRoundRef.current === roundKey) return;
+
+    recentRoundRef.current = roundKey;
+
+    const result: RecentPlayer["result"] =
+      room.winnerId === playerId ? "win" : "loss";
+    const nextRecentPlayers = room.players
+      .filter((player) => player.id !== playerId && !player.isBot)
+      .map((player) => ({
+        playerId: player.id,
+        name: player.name,
+        lastPlayedAt: Date.now(),
+        result,
+      }));
+
+    if (nextRecentPlayers.length === 0) return;
+
+    setRecentPlayers((currentRecentPlayers) => {
+      const merged = [
+        ...nextRecentPlayers,
+        ...currentRecentPlayers.filter(
+          (currentPlayer) =>
+            !nextRecentPlayers.some(
+              (nextPlayer) => nextPlayer.playerId === currentPlayer.playerId
+            )
+        ),
+      ].slice(0, 8);
+
+      AsyncStorage.setItem(
+        RECENT_PLAYERS_STORAGE_KEY,
+        JSON.stringify(merged)
+      ).catch(() => {});
+
+      return merged;
+    });
+  }, [
+    playerId,
+    room?.code,
+    room?.players,
     room?.roundId,
     room?.turnState,
     room?.winnerId,
@@ -192,6 +275,13 @@ export function useAppController() {
       setRoomCodeInput,
       createRoom: createRoomWithEntry,
       joinRoom: joinRoomWithEntry,
+      quickPlay,
+      listPublicRooms,
+      joinPublicRoom,
+      publicRooms,
+      matchmakingStatus,
+      profileFoundation,
+      recentPlayers,
       connected,
       connectionState,
       pendingAction,
@@ -257,7 +347,7 @@ export function useAppController() {
           playerId,
           isHost: Boolean(isHost),
           startGame,
-          toggleReady,
+          addBot,
           leaveRoom,
           connectionState,
           retryConnection,

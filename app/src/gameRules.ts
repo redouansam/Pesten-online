@@ -2,7 +2,7 @@ import { Card, PublicRoomState } from "./types";
 
 export function getTurnText(room: PublicRoomState) {
   if (room.pendingDraw > 0) {
-    return `Pak +${room.pendingDraw} of stapel`;
+    return `Pak ${room.pendingDraw} of stapel met 2/Joker`;
   }
 
   if (room.turnState === "after_draw") {
@@ -10,17 +10,23 @@ export function getTurnText(room: PublicRoomState) {
   }
 
   if (room.turnState === "must_play") {
-    return room.canDraw ? "Heer: pak 1 kaart" : "Heer: leg nog een kaart";
+    return room.canDraw
+      ? "Heer: pak 1 kaart"
+      : "Heer: speel nog precies 1 kaart";
   }
 
   if (room.turnState === "seven_chain") {
     if (room.sevenStopAfterNext) {
       return room.canDraw
         ? "Heer in 7: pak 1 kaart"
-        : "Heer in 7: leg nog een kaart";
+        : "Heer: speel nog precies 1 kaart";
     }
 
-    return "7 actief: zelfde symbool, 7 of afsluiten met dezelfde waarde";
+    return "Alles geven: speel hetzelfde symbool";
+  }
+
+  if (room.chosenSuit) {
+    return "Symbool gekozen";
   }
 
   return "Jij bent aan de beurt";

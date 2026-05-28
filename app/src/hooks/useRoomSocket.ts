@@ -1,7 +1,7 @@
 import * as Haptics from "expo-haptics";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useEffect, useRef, useState } from "react";
-import { Keyboard } from "react-native";
+import { AppState, Keyboard } from "react-native";
 
 import {
   STORAGE_PLAYER_ID,
@@ -10,12 +10,15 @@ import {
 } from "../constants";
 import { sessionStore } from "../sessionStore";
 import { socket } from "../socket";
-import { Card, PublicRoomState, Suit } from "../types";
+import { Card, PublicRoomState, PublicRoomSummary, Suit } from "../types";
 
 type PendingAction =
   | "create"
   | "join"
-  | "ready"
+  | "quick"
+  | "joinPublic"
+  | "listPublic"
+  | "bot"
   | "start"
   | "redraw"
   | "rematch"
@@ -36,13 +39,25 @@ export function useRoomSocket(hapticsEnabled = true) {
   const [hasSavedName, setHasSavedName] = useState(false);
   const [roomCodeInput, setRoomCodeInput] = useState("");
   const [room, setRoom] = useState<PublicRoomState | null>(null);
+  const [publicRooms, setPublicRooms] = useState<PublicRoomSummary[]>([]);
+  const [matchmakingStatus, setMatchmakingStatus] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingAction>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const hapticsEnabledRef = useRef(hapticsEnabled);
+  const nameRef = useRef(name);
+  const playerIdRef = useRef(playerId);
 
   useEffect(() => {
     hapticsEnabledRef.current = hapticsEnabled;
   }, [hapticsEnabled]);
+
+  useEffect(() => {
+    nameRef.current = name;
+  }, [name]);
+
+  useEffect(() => {
+    playerIdRef.current = playerId;
+  }, [playerId]);
 
   useEffect(() => {
     async function loadProfileName() {
@@ -50,6 +65,7 @@ export function useRoomSocket(hapticsEnabled = true) {
 
       if (!savedName) return;
 
+      nameRef.current = savedName;
       setLocalName(savedName);
       setHasSavedName(true);
     }
@@ -61,10 +77,12 @@ export function useRoomSocket(hapticsEnabled = true) {
       const savedPlayerId = await sessionStore.getItem(STORAGE_PLAYER_ID);
       const savedRoomCode = await sessionStore.getItem(STORAGE_ROOM_CODE);
 
-      if (savedPlayerId && savedRoomCode) {
-        socket.emit("reconnect_room", {
+      if (savedPlayerId && savedRoomCode && socket.connected) {
+        setConnectionState("reconnecting");
+        socket.emit("recover_session", {
           playerId: savedPlayerId,
           code: savedRoomCode,
+          name: nameRef.current,
         });
       }
     }
@@ -78,9 +96,9 @@ export function useRoomSocket(hapticsEnabled = true) {
 
     function onDisconnect() {
       setConnected(false);
-      setConnectionState("offline");
+      setConnectionState("reconnecting");
       setPendingAction(null);
-      setErrorMessage("Verbinding weggevallen. We verbinden automatisch opnieuw.");
+      setErrorMessage(null);
     }
 
     function onReconnectAttempt() {
@@ -101,10 +119,11 @@ export function useRoomSocket(hapticsEnabled = true) {
     function onConnectError() {
       setConnected(false);
       setConnectionState("reconnecting");
-      setErrorMessage("Server wordt wakker. Dit kan 30-60 sec duren.");
+      setErrorMessage(null);
     }
 
     async function saveSession(data: { code: string; playerId: string }) {
+      playerIdRef.current = data.playerId;
       setPlayerId(data.playerId);
       await sessionStore.setItem(STORAGE_PLAYER_ID, data.playerId);
       await sessionStore.setItem(STORAGE_ROOM_CODE, data.code);
@@ -123,6 +142,7 @@ export function useRoomSocket(hapticsEnabled = true) {
     }
 
     function onReconnected(data: { code: string; playerId: string }) {
+      setConnectionState("online");
       setPendingAction(null);
       setErrorMessage(null);
       saveSession(data).catch(() => {});
@@ -134,8 +154,25 @@ export function useRoomSocket(hapticsEnabled = true) {
       );
       setPendingAction(null);
       setRoom(null);
+      playerIdRef.current = "";
       setPlayerId("");
-      setErrorMessage("Kamer niet gevonden. Maak of join opnieuw.");
+      setConnectionState(socket.connected ? "online" : "offline");
+      setErrorMessage("Kamer niet meer beschikbaar. Maak of join opnieuw.");
+    }
+
+    function onRoomClosed(data?: { message?: string }) {
+      sessionStore.multiRemove([STORAGE_PLAYER_ID, STORAGE_ROOM_CODE]).catch(
+        () => {}
+      );
+      setPendingAction(null);
+      setMatchmakingStatus(null);
+      setRoom(null);
+      playerIdRef.current = "";
+      setPlayerId("");
+      setConnectionState(socket.connected ? "online" : "offline");
+      setErrorMessage(
+        data?.message ?? "Tafel gesloten omdat er niet genoeg spelers over zijn."
+      );
     }
 
     function onRoomUpdated(updatedRoom: PublicRoomState) {
@@ -144,8 +181,26 @@ export function useRoomSocket(hapticsEnabled = true) {
       sessionStore.setItem(STORAGE_ROOM_CODE, updatedRoom.code).catch(() => {});
     }
 
+    function onPublicRooms(rooms: PublicRoomSummary[]) {
+      setPendingAction((currentAction) =>
+        currentAction === "listPublic" ? null : currentAction
+      );
+      setPublicRooms(rooms);
+    }
+
+    function onQuickPlayResult(data: { status: "created" | "found" | "recovered" }) {
+      setMatchmakingStatus(
+        data.status === "created"
+          ? "Nieuwe tafel gemaakt"
+          : data.status === "found"
+          ? "Tafel gevonden"
+          : "Opnieuw verbonden"
+      );
+    }
+
     function onErrorMessage(message: string) {
       setPendingAction(null);
+      setMatchmakingStatus(null);
       setErrorMessage(message);
       if (hapticsEnabledRef.current) {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(
@@ -160,7 +215,11 @@ export function useRoomSocket(hapticsEnabled = true) {
     socket.on("room_joined", onRoomJoined);
     socket.on("reconnected", onReconnected);
     socket.on("reconnect_failed", onSessionReconnectFailed);
+    socket.on("room_closed", onRoomClosed);
+    socket.on("room_state", onRoomUpdated);
     socket.on("room_updated", onRoomUpdated);
+    socket.on("public_rooms", onPublicRooms);
+    socket.on("quick_play_result", onQuickPlayResult);
     socket.on("error_message", onErrorMessage);
     socket.on("connect_error", onConnectError);
     socket.io.on("reconnect_attempt", onReconnectAttempt);
@@ -197,6 +256,15 @@ export function useRoomSocket(hapticsEnabled = true) {
       window.addEventListener("pageshow", resumeFromBackground);
     }
 
+    const appStateSubscription = AppState.addEventListener(
+      "change",
+      (nextState) => {
+        if (nextState === "active") {
+          resumeFromBackground();
+        }
+      }
+    );
+
     return () => {
       socket.off("connect", onConnect);
       socket.off("disconnect", onDisconnect);
@@ -204,7 +272,11 @@ export function useRoomSocket(hapticsEnabled = true) {
       socket.off("room_joined", onRoomJoined);
       socket.off("reconnected", onReconnected);
       socket.off("reconnect_failed", onSessionReconnectFailed);
+      socket.off("room_closed", onRoomClosed);
+      socket.off("room_state", onRoomUpdated);
       socket.off("room_updated", onRoomUpdated);
+      socket.off("public_rooms", onPublicRooms);
+      socket.off("quick_play_result", onQuickPlayResult);
       socket.off("error_message", onErrorMessage);
       socket.off("connect_error", onConnectError);
       socket.io.off("reconnect_attempt", onReconnectAttempt);
@@ -219,11 +291,12 @@ export function useRoomSocket(hapticsEnabled = true) {
       ) {
         window.removeEventListener("pageshow", resumeFromBackground);
       }
+      appStateSubscription.remove();
       socket.disconnect();
     };
   }, []);
 
-  function createRoom() {
+  function createRoom(visibility: "private" | "public" = "private") {
     if (!connected) {
       setErrorMessage("Server niet verbonden. Probeer het zo opnieuw.");
       return;
@@ -235,6 +308,8 @@ export function useRoomSocket(hapticsEnabled = true) {
     if (hapticsEnabled) Haptics.selectionAsync().catch(() => {});
     socket.emit("create_room", {
       name,
+      visibility,
+      mode: visibility === "public" ? "casual" : "friends",
     });
   }
 
@@ -261,14 +336,57 @@ export function useRoomSocket(hapticsEnabled = true) {
     socket.emit("join_room", {
       code: normalizedRoomCode,
       name,
+      playerId: playerIdRef.current || undefined,
     });
   }
 
-  function toggleReady() {
-    setPendingAction("ready");
+  function quickPlay() {
+    if (!connected) {
+      setErrorMessage("Server niet verbonden. Probeer het zo opnieuw.");
+      return;
+    }
+
+    Keyboard.dismiss();
+    setPendingAction("quick");
+    setMatchmakingStatus("Online tafel zoeken...");
     setErrorMessage(null);
     if (hapticsEnabled) Haptics.selectionAsync().catch(() => {});
-    socket.emit("toggle_ready");
+    socket.emit("quick_play", {
+      name,
+      playerId: playerIdRef.current || undefined,
+    });
+  }
+
+  function listPublicRooms() {
+    if (!connected) {
+      setErrorMessage("Geen verbinding met de server.");
+      return;
+    }
+
+    setPendingAction("listPublic");
+    setErrorMessage(null);
+    socket.emit("list_public_rooms");
+  }
+
+  function joinPublicRoom(code: string) {
+    if (!connected) {
+      setErrorMessage("Geen verbinding met de server.");
+      return;
+    }
+
+    setPendingAction("joinPublic");
+    setErrorMessage(null);
+    socket.emit("join_public_room", {
+      code,
+      name,
+      playerId: playerIdRef.current || undefined,
+    });
+  }
+
+  function addBot() {
+    setPendingAction("bot");
+    setErrorMessage(null);
+    socket.emit("add_bot");
   }
 
   function startGame() {
@@ -344,6 +462,7 @@ export function useRoomSocket(hapticsEnabled = true) {
   function setName(value: string) {
     const nextName = value.trim().slice(0, 18) || "Speler";
 
+    nameRef.current = nextName;
     setLocalName(nextName);
     setHasSavedName(true);
     AsyncStorage.setItem(STORAGE_PLAYER_NAME, nextName).catch(() => {});
@@ -365,13 +484,18 @@ export function useRoomSocket(hapticsEnabled = true) {
     roomCodeInput,
     setRoomCodeInput,
     room,
+    publicRooms,
+    matchmakingStatus,
     pendingAction,
     errorMessage,
     clearError,
     retryConnection,
     createRoom,
     joinRoom,
-    toggleReady,
+    quickPlay,
+    listPublicRooms,
+    joinPublicRoom,
+    addBot,
     startGame,
     leaveRoom,
     playCard,
