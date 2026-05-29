@@ -26,6 +26,7 @@ import { getTurnText, isCardPlayable } from "../gameRules";
 import { GameButton, GameModalFrame } from "./GameChrome";
 import type { ConnectionState } from "../hooks/useRoomSocket";
 import type { CardSizeSetting, MotionSetting } from "../settings";
+import { playGameSound } from "../soundFeedback";
 import { styles } from "../styles";
 import type { TableSkinOption } from "../tableSkins";
 import type { AvatarFrameOption, AvatarOption } from "../cosmetics";
@@ -39,6 +40,7 @@ export function GameTable({
   isYourTurn,
   winnerName,
   loserName,
+  finishRewards,
   drawCards,
   passTurn,
   playCard,
@@ -65,6 +67,13 @@ export function GameTable({
   isYourTurn: boolean;
   winnerName?: string;
   loserName?: string;
+  finishRewards?: {
+    coins: number;
+    xp: number;
+    didWin: boolean;
+    resultLabel: string;
+    missionText: string;
+  };
   drawCards: () => void;
   passTurn: () => void;
   playCard: (card: Card, chosenSuit?: Suit) => void;
@@ -90,6 +99,7 @@ export function GameTable({
 
   const [pendingJackCard, setPendingJackCard] = useState<Card | null>(null);
   const [draggingCardId, setDraggingCardId] = useState<string | null>(null);
+  const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
   const [cardHint, setCardHint] = useState<string | null>(null);
   const [handSortMode, setHandSortMode] = useState<HandSortMode>("suit");
 
@@ -97,7 +107,10 @@ export function GameTable({
   const deckPulseAnim = useRef(new Animated.Value(0)).current;
   const discardAnim = useRef(new Animated.Value(1)).current;
   const invalidShakeAnim = useRef(new Animated.Value(0)).current;
+  const turnPulseAnim = useRef(new Animated.Value(0)).current;
+  const finishRevealAnim = useRef(new Animated.Value(1)).current;
   const wasYourTurnRef = useRef(false);
+  const finishHapticRoundRef = useRef<number | null>(null);
   const previousHandCountRef = useRef(room.hand.length);
   const previousTopCardIdRef = useRef(room.topCard?.id);
   const autoPassNoGemsRef = useRef(false);
@@ -110,6 +123,98 @@ export function GameTable({
 
     wasYourTurnRef.current = isYourTurn;
   }, [hapticsEnabled, isYourTurn, winnerName]);
+
+  useEffect(() => {
+    if (!isYourTurn || winnerName || motionLevel === "low") {
+      turnPulseAnim.setValue(0);
+      return;
+    }
+
+    const animation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(turnPulseAnim, {
+          toValue: 1,
+          duration: 820,
+          useNativeDriver: true,
+        }),
+        Animated.timing(turnPulseAnim, {
+          toValue: 0,
+          duration: 820,
+          useNativeDriver: true,
+        }),
+      ])
+    );
+
+    animation.start();
+
+    return () => animation.stop();
+  }, [isYourTurn, motionLevel, turnPulseAnim, winnerName]);
+
+  useEffect(() => {
+    setSelectedCardId((currentSelectedCardId) => {
+      if (!currentSelectedCardId || !isYourTurn || roundFinished) return null;
+
+      const selectedCard = room.hand.find(
+        (card) => card.id === currentSelectedCardId
+      );
+
+      return selectedCard && isCardPlayable(room, selectedCard)
+        ? currentSelectedCardId
+        : null;
+    });
+  }, [
+    isYourTurn,
+    room.chosenSuit,
+    room.currentPlayerId,
+    room.hand,
+    room.pendingDraw,
+    room.sevenStopAfterNext,
+    room.sevenSuit,
+    room.topCard?.id,
+    room.turnState,
+    roundFinished,
+  ]);
+
+  useEffect(() => {
+    if (!winnerName) {
+      finishRevealAnim.setValue(0);
+      return;
+    }
+
+    if (finishHapticRoundRef.current !== room.roundId) {
+      finishHapticRoundRef.current = room.roundId;
+      playGameSound("win");
+
+      if (hapticsEnabled) {
+        Haptics.notificationAsync(
+          finishRewards?.didWin
+            ? Haptics.NotificationFeedbackType.Success
+            : Haptics.NotificationFeedbackType.Warning
+        ).catch(() => {});
+      }
+    }
+
+    if (motionLevel === "low") {
+      finishRevealAnim.setValue(1);
+      return;
+    }
+
+    finishRevealAnim.setValue(0);
+
+    Animated.spring(finishRevealAnim, {
+      toValue: 1,
+      friction: 8,
+      tension: 88,
+      useNativeDriver: true,
+    }).start();
+  }, [
+    finishRevealAnim,
+    finishRewards?.didWin,
+    hapticsEnabled,
+    motionLevel,
+    room.roundId,
+    winnerName,
+  ]);
 
   useEffect(() => {
     if (motionLevel === "low") {
@@ -220,6 +325,15 @@ export function GameTable({
       ),
     [handSortMode, room.hand]
   );
+  const selectedCard = selectedCardId
+    ? sortedHand.find((card) => card.id === selectedCardId)
+    : undefined;
+  const selectedCardPlayable = Boolean(
+    selectedCard &&
+      isYourTurn &&
+      !roundFinished &&
+      isCardPlayable(room, selectedCard)
+  );
 
   const currentPlayer = room.players.find(
     (player) => player.id === room.currentPlayerId
@@ -291,11 +405,26 @@ export function GameTable({
     (card) => isYourTurn && !roundFinished && isCardPlayable(room, card)
   ).length;
   const ruleBadges = useMemo(() => getRuleBadges(room), [room]);
+  const ruleBanners = useMemo(
+    () => getRuleBanners(room, connectionState),
+    [connectionState, room]
+  );
+  const showRuleBadges = ruleBanners.length === 0;
+  const topTurnText = getTopTurnText({
+    room,
+    currentPlayerName: currentPlayer?.name,
+    currentPlayerIsBot: Boolean(currentPlayer?.isBot),
+    isWaitingForNextRound,
+    isYourTurn,
+    winnerName,
+  });
   const turnCoachText = getTurnCoachText({
     room,
     isYourTurn,
     currentPlayerName: currentPlayer?.name,
+    currentPlayerIsBot: Boolean(currentPlayer?.isBot),
     playableCardsCount,
+    selectedCardName: selectedCard ? getCardDisplayName(selectedCard) : undefined,
     winnerName,
   });
 
@@ -328,11 +457,13 @@ export function GameTable({
     if (roundFinished) return;
 
     if (!isYourTurn) {
+      playGameSound("invalid");
       showCardHint("Wacht tot jij aan de beurt bent.");
       return;
     }
 
     if (!isCardPlayable(room, card)) {
+      playGameSound("invalid");
       if (hapticsEnabled) {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(
           () => {}
@@ -342,7 +473,49 @@ export function GameTable({
       return;
     }
 
+    if (selectedCardId === card.id) {
+      playPlayableCard(card);
+      return;
+    }
+
+    setSelectedCardId(card.id);
+    playGameSound("card_select");
+
+    if (hapticsEnabled) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    }
+
+    showCardHint(`${getCardDisplayName(card)} geselecteerd. Tik Speel of tik nogmaals.`);
+  }
+
+  function handlePlaySelectedCard() {
+    if (!selectedCard) {
+      showCardHint("Kies eerst een speelbare kaart.");
+      return;
+    }
+
+    if (!selectedCardPlayable) {
+      playGameSound("invalid");
+      if (hapticsEnabled) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(
+          () => {}
+        );
+      }
+      showCardHint(`Ongeldige kaart. ${getInvalidCardHint(room)}`);
+      return;
+    }
+
+    playPlayableCard(selectedCard);
+  }
+
+  function playPlayableCard(card: Card) {
     if (room.hand.length === 1 && isPestCard(card)) {
+      playGameSound("invalid");
+      if (hapticsEnabled) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(
+          () => {}
+        );
+      }
       showCardHint("Je mag niet eindigen met een pestkaart. Je pakt 2 strafkaarten.");
     }
 
@@ -351,7 +524,12 @@ export function GameTable({
       return;
     }
 
-    if (hapticsEnabled) Haptics.selectionAsync().catch(() => {});
+    playGameSound("card_play");
+    if (hapticsEnabled) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+    }
+
+    setSelectedCardId(null);
     playCard(card);
   }
 
@@ -367,12 +545,21 @@ export function GameTable({
     redrawDrawnCard();
   }
 
+  function handleDrawCards() {
+    playGameSound("draw");
+    drawCards();
+  }
+
   function chooseSuitForJack(suit: Suit) {
     if (!pendingJackCard) return;
 
-    if (hapticsEnabled) Haptics.selectionAsync().catch(() => {});
+    playGameSound("card_play");
+    if (hapticsEnabled) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+    }
     playCard(pendingJackCard, suit);
     setPendingJackCard(null);
+    setSelectedCardId(null);
   }
 
   function chooseHandSortMode(mode: HandSortMode) {
@@ -405,25 +592,29 @@ export function GameTable({
           <Text style={styles.gameInfoValue}>{room.code}</Text>
         </View>
 
-        <View
+        <Animated.View
           style={[
             styles.turnBanner,
             compactControls && styles.turnBannerCompact,
             isYourTurn && !winnerName ? styles.turnBannerActive : null,
+            isYourTurn && !winnerName
+              ? {
+                  transform: [
+                    {
+                      scale: turnPulseAnim.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [1, 1.018],
+                      }),
+                    },
+                  ],
+                }
+              : null,
           ]}
         >
-          <Text style={styles.turnBannerText}>
-            {winnerName
-              ? "Ronde klaar"
-              : isWaitingForNextRound
-              ? "Je kijkt mee"
-              : isYourTurn
-              ? getTurnText(room)
-              : `Wachten op ${currentPlayer?.name ?? "speler"}`}
-          </Text>
-        </View>
+          <Text style={styles.turnBannerText}>{topTurnText}</Text>
+        </Animated.View>
 
-        <Pressable
+                        <Pressable
           style={[
             styles.exitMiniButton,
             compactControls && styles.exitMiniButtonCompact,
@@ -533,7 +724,7 @@ export function GameTable({
                           compactTable && styles.deckCardCompact,
                           !room.canDraw && styles.disabledDeck,
                         ]}
-                        onPress={drawCards}
+                        onPress={handleDrawCards}
                         disabled={!room.canDraw}
                       >
                         <Image
@@ -716,12 +907,29 @@ export function GameTable({
 
             <Pressable
               style={[
+                styles.playSelectedButton,
+                compactControls && styles.playSelectedButtonCompact,
+                selectedCardPlayable && styles.playSelectedButtonReady,
+                !selectedCardPlayable && styles.disabledButton,
+              ]}
+              onPress={handlePlaySelectedCard}
+            >
+              <Text style={styles.playSelectedButtonText}>
+                {selectedCard?.value === "J" ? "Kies" : "Speel"}
+              </Text>
+              <Text style={styles.playSelectedButtonSub} numberOfLines={1}>
+                {selectedCard ? getCardShortName(selectedCard) : "kaart"}
+              </Text>
+            </Pressable>
+
+            <Pressable
+              style={[
                 styles.actionButton,
                 compactControls && styles.actionButtonCompact,
                 room.canDraw && isYourTurn && styles.actionButtonReady,
                 !room.canDraw && styles.disabledButton,
               ]}
-              onPress={drawCards}
+              onPress={handleDrawCards}
               disabled={!room.canDraw}
             >
               <Text style={styles.actionButtonText}>
@@ -813,24 +1021,47 @@ export function GameTable({
           </Text>
         </View>
 
-        <View style={styles.ruleStatusRow}>
-          {ruleBadges.map((badge) => (
-            <View
-              key={badge.label}
-              style={[
-                styles.ruleStatusChip,
-                badge.tone === "danger" && styles.ruleStatusChipDanger,
-                badge.tone === "success" && styles.ruleStatusChipSuccess,
-                badge.tone === "warning" && styles.ruleStatusChipWarning,
-              ]}
-            >
-              <Text style={styles.ruleStatusLabel}>{badge.label}</Text>
-              <Text style={styles.ruleStatusValue} numberOfLines={1}>
-                {badge.value}
-              </Text>
-            </View>
-          ))}
-        </View>
+        {ruleBanners.length > 0 ? (
+          <View style={styles.ruleBannerList}>
+            {ruleBanners.map((banner) => (
+              <View
+                key={banner.label}
+                style={[
+                  styles.ruleBanner,
+                  banner.tone === "danger" && styles.ruleBannerDanger,
+                  banner.tone === "success" && styles.ruleBannerSuccess,
+                  banner.tone === "warning" && styles.ruleBannerWarning,
+                ]}
+              >
+                <Text style={styles.ruleBannerLabel}>{banner.label}</Text>
+                <Text style={styles.ruleBannerText} numberOfLines={2}>
+                  {banner.message}
+                </Text>
+              </View>
+            ))}
+          </View>
+        ) : null}
+
+        {showRuleBadges ? (
+          <View style={styles.ruleStatusRow}>
+            {ruleBadges.map((badge) => (
+              <View
+                key={badge.label}
+                style={[
+                  styles.ruleStatusChip,
+                  badge.tone === "danger" && styles.ruleStatusChipDanger,
+                  badge.tone === "success" && styles.ruleStatusChipSuccess,
+                  badge.tone === "warning" && styles.ruleStatusChipWarning,
+                ]}
+              >
+                <Text style={styles.ruleStatusLabel}>{badge.label}</Text>
+                <Text style={styles.ruleStatusValue} numberOfLines={1}>
+                  {badge.value}
+                </Text>
+              </View>
+            ))}
+          </View>
+        ) : null}
 
         <View
           style={[
@@ -846,7 +1077,7 @@ export function GameTable({
               <Text style={styles.waitingHandText}>
                 {isWaitingForNextRound
                   ? "Je zit klaar en speelt automatisch mee in de volgende ronde."
-                  : "De rest speelt door tot er een verliezer overblijft."}
+                  : "De ronde is klaar. Kies nog een potje of ga terug naar de lobby."}
               </Text>
             </View>
           ) : (
@@ -895,10 +1126,12 @@ export function GameTable({
                     playable={playable}
                     layout={handLayout}
                     fanAngle={fanAngle}
+                    selected={selectedCardId === card.id}
                     isDragging={draggingCardId === card.id}
                     hapticsEnabled={hapticsEnabled}
                     motionLevel={motionLevel}
                     onPress={handleCardPress}
+                    onPlay={playPlayableCard}
                     onDragStart={() => setDraggingCardId(card.id)}
                     onDragEnd={() => setDraggingCardId(null)}
                   />
@@ -954,13 +1187,49 @@ export function GameTable({
         <View style={styles.modalOverlay}>
           <GameModalFrame
             eyebrow="Ronde klaar"
-            title={winnerName ? `${winnerName} wint` : "Ronde klaar"}
+            title={finishRewards?.resultLabel ?? (winnerName ? `${winnerName} wint` : "Ronde klaar")}
             text={
-              loserName
-                ? `${loserName} bleef als laatste over.`
+              finishRewards?.didWin
+                ? "Sterk gespeeld. Je beloning is toegevoegd."
+                : winnerName
+                ? `${winnerName} wint deze ronde.`
+                : loserName
+                ? `${loserName} bleef over.`
                 : "Beloningen bijgewerkt."
             }
           >
+            {finishRewards ? (
+              <Animated.View
+                style={[
+                  styles.finishRewardGrid,
+                  {
+                    opacity: finishRevealAnim,
+                    transform: [
+                      {
+                        scale: finishRevealAnim.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [0.94, 1],
+                        }),
+                      },
+                    ],
+                  },
+                ]}
+              >
+                <View style={styles.finishRewardTile}>
+                  <Text style={styles.finishRewardLabel}>Coins</Text>
+                  <Text style={styles.finishRewardValue}>+{finishRewards.coins}</Text>
+                </View>
+                <View style={styles.finishRewardTile}>
+                  <Text style={styles.finishRewardLabel}>XP</Text>
+                  <Text style={styles.finishRewardValue}>+{finishRewards.xp}</Text>
+                </View>
+              </Animated.View>
+            ) : null}
+
+            {finishRewards?.missionText ? (
+              <Text style={styles.finishMissionText}>{finishRewards.missionText}</Text>
+            ) : null}
+
             <View style={styles.rankingList}>
               {endRanking.map((entry) => (
                 <View
@@ -980,30 +1249,15 @@ export function GameTable({
             </View>
 
             <View style={styles.rematchPanel}>
-              <Text style={styles.rematchTitle}>Nog een potje?</Text>
-              {room.players
-                .filter((player) => player.connected)
-                .map((player) => {
-                  const voted = Boolean(room.rematchVotes[player.id]);
-
-                  return (
-                    <View key={player.id} style={styles.rematchVoteRow}>
-                      <Text style={styles.rematchVoteName}>{player.name}</Text>
-                      <Text
-                        style={[
-                          styles.rematchVoteState,
-                          voted && styles.rematchVoteStateReady,
-                        ]}
-                      >
-                        {voted ? "klaar" : "wacht"}
-                      </Text>
-                    </View>
-                  );
-                })}
+              <Text style={styles.rematchTitle}>Volgende stap</Text>
+              <Text style={styles.finishMissionText}>
+                Nog een potje zet de tafel terug naar de lobby. De host kan daarna
+                opnieuw starten.
+              </Text>
             </View>
 
             <GameButton
-              label={rematchPending ? "Even wachten" : "Opnieuw"}
+              label={rematchPending ? "Even wachten" : "Nog een potje"}
               onPress={() => playAgain(true)}
               disabled={rematchPending}
             />
@@ -1015,11 +1269,12 @@ export function GameTable({
               disabled={rematchPending}
             />
 
-            <Text style={styles.voteText}>
-              {room.players.filter((player) => room.rematchVotes[player.id])
-                .length}
-              /{room.players.filter((player) => player.connected).length} spelers willen opnieuw
-            </Text>
+            <GameButton
+              label="Naar home"
+              onPress={leaveRoom}
+              tone="secondary"
+              disabled={rematchPending}
+            />
           </GameModalFrame>
         </View>
       </Modal>
@@ -1039,6 +1294,12 @@ type HandLayout = {
 type RuleBadge = {
   label: string;
   value: string;
+  tone: "neutral" | "danger" | "success" | "warning";
+};
+
+type RuleBanner = {
+  label: string;
+  message: string;
   tone: "neutral" | "danger" | "success" | "warning";
 };
 
@@ -1089,6 +1350,67 @@ function getRuleBadges(room: PublicRoomState): RuleBadge[] {
   return badges.slice(0, 3);
 }
 
+function getRuleBanners(
+  room: PublicRoomState,
+  connectionState: ConnectionState
+): RuleBanner[] {
+  const banners: RuleBanner[] = [];
+
+  if (connectionState !== "online") {
+    banners.push({
+      label: "Verbinding",
+      message: "Verbinding herstellen...",
+      tone: "warning",
+    });
+  }
+
+  if (room.lastMessage?.toLowerCase().includes("pestkaart")) {
+    banners.push({
+      label: "Laatste kaart",
+      message: "Je mag niet eindigen met een pestkaart.",
+      tone: "danger",
+    });
+  }
+
+  if (room.pendingDraw > 0) {
+    banners.push({
+      label: "Strafstapel",
+      message: `Pak ${room.pendingDraw} of stapel met 2/Joker.`,
+      tone: "danger",
+    });
+  }
+
+  if (room.chosenSuit) {
+    banners.push({
+      label: "Boer",
+      message: `Symbool gekozen: ${suitLabels[room.chosenSuit]}.`,
+      tone: "success",
+    });
+  }
+
+  if (room.turnState === "seven_chain") {
+    banners.push({
+      label: "Alles geven",
+      message: room.sevenStopAfterNext
+        ? "Heer in 7: speel nog precies 1 kaart."
+        : "Speel hetzelfde symbool of sluit de reeks correct af.",
+      tone: "warning",
+    });
+  }
+
+  if (room.turnState === "must_play") {
+    banners.push({
+      label: "Heer",
+      message: room.canDraw
+        ? "Geen passende extra kaart: pak 1 kaart."
+        : "Speel nog precies 1 extra kaart.",
+      tone: "warning",
+    });
+  }
+
+  return banners.slice(0, 3);
+}
+
 function getEndRanking(room: PublicRoomState) {
   const rankedPlayers: {
     label: string;
@@ -1110,13 +1432,19 @@ function getEndRanking(room: PublicRoomState) {
     usedPlayerIds.add(player.id);
   }
 
-  const loser =
-    room.players.find((player) => player.id === room.loserId) ??
-    room.players.find((player) => !usedPlayerIds.has(player.id));
+  const remainingPlayers = [
+    room.players.find((player) => player.id === room.loserId),
+    ...room.players.filter((player) => !usedPlayerIds.has(player.id)),
+  ].filter((player): player is PublicPlayer => Boolean(player));
+  const uniqueRemainingPlayers = remainingPlayers.filter(
+    (player, index, players) =>
+      !usedPlayerIds.has(player.id) &&
+      players.findIndex((item) => item.id === player.id) === index
+  );
 
-  if (loser && !usedPlayerIds.has(loser.id)) {
+  for (const loser of uniqueRemainingPlayers) {
     rankedPlayers.push({
-      label: "Laatste",
+      label: uniqueRemainingPlayers.length === 1 ? "Laatste" : "Niet uit",
       player: loser,
       isLoser: true,
     });
@@ -1170,17 +1498,44 @@ function compareCardsByValue(cardA: Card, cardB: Card) {
   );
 }
 
+function getTopTurnText({
+  room,
+  isYourTurn,
+  isWaitingForNextRound,
+  currentPlayerName,
+  currentPlayerIsBot,
+  winnerName,
+}: {
+  room: PublicRoomState;
+  isYourTurn: boolean;
+  isWaitingForNextRound: boolean;
+  currentPlayerName?: string;
+  currentPlayerIsBot: boolean;
+  winnerName?: string;
+}) {
+  if (winnerName) return "Ronde klaar";
+  if (isWaitingForNextRound) return "Je kijkt mee";
+  if (isYourTurn) return getTurnText(room);
+  if (currentPlayerIsBot) return `${currentPlayerName ?? "Bot"} denkt...`;
+
+  return `Wachten op ${currentPlayerName ?? "speler"}`;
+}
+
 function getTurnCoachText({
   room,
   isYourTurn,
   currentPlayerName,
+  currentPlayerIsBot,
   playableCardsCount,
+  selectedCardName,
   winnerName,
 }: {
   room: PublicRoomState;
   isYourTurn: boolean;
   currentPlayerName?: string;
+  currentPlayerIsBot: boolean;
   playableCardsCount: number;
+  selectedCardName?: string;
   winnerName?: string;
 }) {
   if (winnerName) {
@@ -1188,7 +1543,15 @@ function getTurnCoachText({
   }
 
   if (!isYourTurn) {
+    if (currentPlayerIsBot) {
+      return `${currentPlayerName ?? "Bot"} denkt na...`;
+    }
+
     return `Wachten op ${currentPlayerName ?? "speler"}.`;
+  }
+
+  if (selectedCardName) {
+    return `${selectedCardName} geselecteerd. Tik Speel of tik nogmaals.`;
   }
 
   if (room.pendingDraw > 0) {
@@ -1272,6 +1635,37 @@ function getInvalidCardHint(room: PublicRoomState) {
   return "Deze kaart past nu niet.";
 }
 
+function getCardDisplayName(card: Card) {
+  if (card.value === "JOKER") return "Joker";
+
+  const valueLabels: Record<Card["value"], string> = {
+    A: "Aas",
+    "2": "2",
+    "3": "3",
+    "4": "4",
+    "5": "5",
+    "6": "6",
+    "7": "7",
+    "8": "8",
+    "9": "9",
+    "10": "10",
+    J: "Boer",
+    Q: "Vrouw",
+    K: "Heer",
+    JOKER: "Joker",
+  };
+
+  return card.suit
+    ? `${valueLabels[card.value]} ${suitLabels[card.suit]}`
+    : valueLabels[card.value];
+}
+
+function getCardShortName(card: Card) {
+  if (card.value === "JOKER") return "Joker";
+
+  return `${card.value}${card.suit ? suitShortLabels[card.suit] : ""}`;
+}
+
 function isPestCard(card: Card) {
   return ["A", "2", "7", "8", "J", "K", "JOKER"].includes(card.value);
 }
@@ -1282,10 +1676,12 @@ function HandCard({
   playable,
   layout,
   fanAngle,
+  selected,
   isDragging,
   hapticsEnabled,
   motionLevel,
   onPress,
+  onPlay,
   onDragStart,
   onDragEnd,
 }: {
@@ -1294,10 +1690,12 @@ function HandCard({
   playable: boolean;
   layout: HandLayout;
   fanAngle: number;
+  selected: boolean;
   isDragging: boolean;
   hapticsEnabled: boolean;
   motionLevel: MotionSetting;
   onPress: (card: Card) => void;
+  onPlay: (card: Card) => void;
   onDragStart: () => void;
   onDragEnd: () => void;
 }) {
@@ -1353,7 +1751,7 @@ function HandCard({
             }).start(() => {
               pan.setValue({ x: 0, y: 0 });
               onDragEnd();
-              onPress(card);
+              onPlay(card);
             });
 
             return;
@@ -1375,7 +1773,7 @@ function HandCard({
           }).start(onDragEnd);
         },
       }),
-    [card, hapticsEnabled, onDragEnd, onDragStart, onPress, pan, playable]
+    [card, hapticsEnabled, onDragEnd, onDragStart, onPlay, pan, playable]
   );
 
   return (
@@ -1384,6 +1782,7 @@ function HandCard({
       style={[
         styles.handCardButton,
         playable ? styles.playableCard : styles.notPlayableCard,
+        selected && styles.selectedCard,
         isDragging && styles.draggingCard,
         {
           width: layout.cardWidth,
@@ -1399,18 +1798,25 @@ function HandCard({
               }),
             },
             { translateX: pan.x },
-            { translateY: playable ? -10 : 0 },
+            { translateY: selected ? -18 : playable ? -10 : 0 },
             { translateY: pan.y },
             { rotate: `${fanAngle}deg` },
-            { scale: playable ? 1.04 : 1 },
+            { scale: selected ? 1.09 : playable ? 1.04 : 1 },
           ],
         },
       ]}
     >
       <Pressable hitSlop={8} onPress={() => onPress(card)}>
         {playable ? (
-          <View style={styles.playablePip}>
-            <Text style={styles.playablePipText}>OK</Text>
+          <View style={[styles.playablePip, selected && styles.playablePipSelected]}>
+            <Text
+              style={[
+                styles.playablePipText,
+                selected && styles.playablePipTextSelected,
+              ]}
+            >
+              {selected ? "Speel" : "OK"}
+            </Text>
           </View>
         ) : null}
 
