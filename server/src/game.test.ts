@@ -795,7 +795,7 @@ describe("game rules", () => {
     assert.equal(getCurrentPlayer(room)?.id, "2");
   });
 
-  it("continues after the first winner until one loser remains", () => {
+  it("finishes immediately when a player legally plays their last card", () => {
     const room = makeRoom(3);
 
     room.discardPile = [makeCard("top", "5", "hearts")];
@@ -806,17 +806,28 @@ describe("game rules", () => {
     playCard(room, "1", "p1-out");
 
     assert.equal(room.winnerId, "1");
-    assert.equal(room.turnState, "normal");
-    assert.equal(room.loserId, undefined);
-    assert.deepEqual(room.finishedPlayerIds, ["1"]);
-    assert.equal(getCurrentPlayer(room)?.id, "2");
-
-    playCard(room, "2", "p2-out");
-
-    assert.equal(room.winnerId, "1");
-    assert.equal(room.loserId, "3");
     assert.equal(room.turnState, "finished");
-    assert.deepEqual(room.finishedPlayerIds, ["1", "2"]);
+    assert.deepEqual(room.finishedPlayerIds, ["1"]);
+    assert.equal(room.pendingDraw, 0);
+    assert.equal(room.chosenSuit, undefined);
+    assert.equal(room.redrawOffer, undefined);
+
+    assert.throws(
+      () => playCard(room, "2", "p2-out"),
+      /Game is al klaar/
+    );
+  });
+
+  it("keeps bot turns stopped after the room is finished", () => {
+    const room = makeRoom(2);
+
+    room.players[0] = makeBot("1");
+    room.turnState = "finished";
+    assert.equal(room.turnState, "finished");
+    room.hands["1"] = [makeCard("bot-play", "5", "clubs")];
+
+    assert.equal(playBotTurn(room, "1"), false);
+    assert.equal(room.discardPile[room.discardPile.length - 1].id, "top");
   });
 
   it("keeps late joiners waiting until the next round and skips them in turn order", () => {

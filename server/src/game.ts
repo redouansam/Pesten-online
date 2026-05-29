@@ -439,44 +439,32 @@ function finishRoundIfHandEmpty(room: GameRoom, playerId: string) {
     room.finishedPlayerIds.push(playerId);
   }
 
-  if (!room.winnerId) {
-    room.winnerId = playerId;
-  }
-
   const remainingPlayers = getRemainingRoundPlayers(room);
+  const loser =
+    remainingPlayers.length === 1
+      ? remainingPlayers[0]
+      : remainingPlayers.find((player) => player.id !== playerId);
 
-  if (remainingPlayers.length <= 1) {
-    const loser = remainingPlayers[0];
+  room.winnerId = playerId;
+  room.loserId = loser?.id;
+  room.turnState = "finished";
+  room.pendingDraw = 0;
+  room.chosenSuit = undefined;
+  room.sevenSuit = undefined;
+  room.sevenStopAfterNext = false;
+  room.redrawOffer = undefined;
 
-    room.loserId = loser?.id;
-    room.turnState = "finished";
-    room.pendingDraw = 0;
-    room.chosenSuit = undefined;
-    room.sevenSuit = undefined;
-    room.sevenStopAfterNext = false;
-    room.redrawOffer = undefined;
+  if (loser) {
+    const loserIndex = room.players.findIndex((player) => player.id === loser.id);
 
-    if (loser) {
-      const loserIndex = room.players.findIndex((player) => player.id === loser.id);
-
-      if (loserIndex !== -1) {
-        room.currentPlayerIndex = loserIndex;
-      }
+    if (loserIndex !== -1) {
+      room.currentPlayerIndex = loserIndex;
     }
-
-    room.lastMessage = loser
-      ? `${getPlayerName(room, playerId)} is uit. ${loser.name} blijft als laatste over.`
-      : `${getPlayerName(room, playerId)} is uit.`;
-
-    return true;
   }
 
-  room.lastMessage = `${getPlayerName(
-    room,
-    playerId
-  )} is uit. ${remainingPlayers.length} spelers gaan door.`;
+  room.lastMessage = `${getPlayerName(room, playerId)} is uit en wint de ronde.`;
 
-  return false;
+  return true;
 }
 
 function penalizePestCardFinish(room: GameRoom, playerId: string) {

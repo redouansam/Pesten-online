@@ -128,6 +128,7 @@ function normalizeWallet(value: Partial<Wallet> | null): Wallet {
     ownedTableSkinIds,
     gamesPlayed: value?.gamesPlayed ?? 0,
     wins: value?.wins ?? 0,
+    losses: value?.losses ?? Math.max(0, (value?.gamesPlayed ?? 0) - (value?.wins ?? 0)),
     pestCardsPlayed: value?.pestCardsPlayed ?? 0,
     dailyMissionDate: currentDay,
     dailyMissionClaims: hasCurrentDailyProgress
@@ -143,6 +144,28 @@ function normalizeWallet(value: Partial<Wallet> | null): Wallet {
     claimedMilestoneRewards: value?.claimedMilestoneRewards ?? [],
     claimedSeasonRewards: value?.claimedSeasonRewards ?? [],
     rewardedRounds: value?.rewardedRounds ?? [],
+  };
+}
+
+function resetDailyProgressIfNeeded(wallet: Wallet) {
+  const currentDay = todayKey();
+
+  if (wallet.dailyMissionDate === currentDay) return wallet;
+
+  return {
+    ...wallet,
+    dailyMissionDate: currentDay,
+    dailyMissionClaims: [],
+    dailyGamesPlayed: 0,
+    dailyWins: 0,
+    dailyPestCardsPlayed: 0,
+  };
+}
+
+export function getGameResultReward(didWin: boolean) {
+  return {
+    coins: GAME_PLAYED_COINS + (didWin ? GAME_WIN_COINS : 0),
+    xp: GAME_PLAYED_XP + (didWin ? GAME_WIN_XP : 0),
   };
 }
 
@@ -522,46 +545,48 @@ export function useEconomy() {
   function recordGameResult(roundKey: string, didWin: boolean) {
     const rewardKey = `round-${roundKey}`;
 
-    if (wallet.rewardedRounds.includes(rewardKey)) return;
+    const currentWallet = resetDailyProgressIfNeeded(walletRef.current);
 
-    const earnedCoins = GAME_PLAYED_COINS + (didWin ? GAME_WIN_COINS : 0);
-    const earnedXp = GAME_PLAYED_XP + (didWin ? GAME_WIN_XP : 0);
+    if (currentWallet.rewardedRounds.includes(rewardKey)) return;
 
-    setWallet((currentWallet) => {
-      if (currentWallet.rewardedRounds.includes(rewardKey)) {
-        return currentWallet;
-      }
+    const reward = getGameResultReward(didWin);
+    const nextWallet = {
+      ...currentWallet,
+      coins: currentWallet.coins + reward.coins,
+      xp: currentWallet.xp + reward.xp,
+      gamesPlayed: currentWallet.gamesPlayed + 1,
+      wins: currentWallet.wins + (didWin ? 1 : 0),
+      losses: currentWallet.losses + (didWin ? 0 : 1),
+      dailyMissionDate: todayKey(),
+      dailyGamesPlayed: currentWallet.dailyGamesPlayed + 1,
+      dailyWins: currentWallet.dailyWins + (didWin ? 1 : 0),
+      winStreak: didWin ? currentWallet.winStreak + 1 : 0,
+      bestWinStreak: didWin
+        ? Math.max(currentWallet.bestWinStreak, currentWallet.winStreak + 1)
+        : currentWallet.bestWinStreak,
+      rewardedRounds: [...currentWallet.rewardedRounds, rewardKey].slice(-40),
+    };
 
-      return {
-        ...currentWallet,
-        coins: currentWallet.coins + earnedCoins,
-        xp: currentWallet.xp + earnedXp,
-        gamesPlayed: currentWallet.gamesPlayed + 1,
-        wins: currentWallet.wins + (didWin ? 1 : 0),
-        dailyMissionDate: todayKey(),
-        dailyGamesPlayed: currentWallet.dailyGamesPlayed + 1,
-        dailyWins: currentWallet.dailyWins + (didWin ? 1 : 0),
-        winStreak: didWin ? currentWallet.winStreak + 1 : 0,
-        bestWinStreak: didWin
-          ? Math.max(currentWallet.bestWinStreak, currentWallet.winStreak + 1)
-          : currentWallet.bestWinStreak,
-        rewardedRounds: [...currentWallet.rewardedRounds, rewardKey].slice(-40),
-      };
-    });
+    walletRef.current = nextWallet;
+    setWallet(nextWallet);
     setNotice(
       didWin
-        ? `Gewonnen: +${earnedCoins} coins en +${earnedXp} XP.`
-        : `Potje gespeeld: +${earnedCoins} coins en +${earnedXp} XP.`
+        ? `Gewonnen: +${reward.coins} coins en +${reward.xp} XP.`
+        : `Potje gespeeld: +${reward.coins} coins en +${reward.xp} XP.`
     );
   }
 
   function recordPestCardPlayed() {
-    setWallet((currentWallet) => ({
+    const currentWallet = resetDailyProgressIfNeeded(walletRef.current);
+    const nextWallet = {
       ...currentWallet,
       dailyMissionDate: todayKey(),
       pestCardsPlayed: currentWallet.pestCardsPlayed + 1,
       dailyPestCardsPlayed: currentWallet.dailyPestCardsPlayed + 1,
-    }));
+    };
+
+    walletRef.current = nextWallet;
+    setWallet(nextWallet);
   }
 
   function claimDailyMission(missionId: string) {
@@ -569,24 +594,29 @@ export function useEconomy() {
 
     if (!mission) return;
 
-    if (wallet.dailyMissionClaims.includes(mission.id)) {
+    const currentWallet = resetDailyProgressIfNeeded(walletRef.current);
+
+    if (currentWallet.dailyMissionClaims.includes(mission.id)) {
       setNotice("Deze dagmissie is al geclaimd.");
       return;
     }
 
-    if (getDailyMissionProgress(wallet, mission) < mission.target) {
+    if (getDailyMissionProgress(currentWallet, mission) < mission.target) {
       setNotice("Deze dagmissie is nog niet klaar.");
       return;
     }
 
-    setWallet((currentWallet) => ({
+    const nextWallet = {
       ...currentWallet,
       coins: currentWallet.coins + (mission.coins ?? 0),
       gems: currentWallet.gems + (mission.gems ?? 0),
       xp: currentWallet.xp + (mission.xp ?? 0),
       dailyMissionDate: todayKey(),
       dailyMissionClaims: [...currentWallet.dailyMissionClaims, mission.id],
-    }));
+    };
+
+    walletRef.current = nextWallet;
+    setWallet(nextWallet);
 
     const rewards = [
       mission.coins ? `+${mission.coins} coins` : null,
@@ -602,49 +632,49 @@ export function useEconomy() {
 
     if (!reward) return;
 
-    if (season.level < reward.level) {
+    const currentWallet = walletRef.current;
+    const currentSeason = getSeasonProgress(currentWallet.xp);
+
+    if (currentSeason.level < reward.level) {
       setNotice(`Bereik level ${reward.level} om dit te claimen.`);
       return;
     }
 
-    if (reward.premium && !wallet.premiumPass) {
+    if (reward.premium && !currentWallet.premiumPass) {
       setNotice("Deze reward hoort bij de premium pass.");
       return;
     }
 
-    if (wallet.claimedSeasonRewards.includes(reward.id)) {
+    if (currentWallet.claimedSeasonRewards.includes(reward.id)) {
       setNotice("Deze season reward is al geclaimd.");
       return;
     }
 
-    setWallet((currentWallet) => {
-      const ownedCardBackIds = reward.cardBackId
-        ? [...new Set([...currentWallet.ownedCardBackIds, reward.cardBackId])]
-        : currentWallet.ownedCardBackIds;
-      const ownedAvatarFrameIds = reward.avatarFrameId
-        ? [
-            ...new Set([
-              ...currentWallet.ownedAvatarFrameIds,
-              reward.avatarFrameId,
-            ]),
-          ]
-        : currentWallet.ownedAvatarFrameIds;
-      const ownedTableSkinIds = reward.tableSkinId
-        ? [...new Set([...currentWallet.ownedTableSkinIds, reward.tableSkinId])]
-        : currentWallet.ownedTableSkinIds;
+    const ownedCardBackIds = reward.cardBackId
+      ? [...new Set([...currentWallet.ownedCardBackIds, reward.cardBackId])]
+      : currentWallet.ownedCardBackIds;
+    const ownedAvatarFrameIds = reward.avatarFrameId
+      ? [
+          ...new Set([
+            ...currentWallet.ownedAvatarFrameIds,
+            reward.avatarFrameId,
+          ]),
+        ]
+      : currentWallet.ownedAvatarFrameIds;
+    const ownedTableSkinIds = reward.tableSkinId
+      ? [...new Set([...currentWallet.ownedTableSkinIds, reward.tableSkinId])]
+      : currentWallet.ownedTableSkinIds;
+    const nextWallet = {
+      ...currentWallet,
+      coins: currentWallet.coins + (reward.coins ?? 0),
+      ownedCardBackIds,
+      ownedAvatarFrameIds,
+      ownedTableSkinIds,
+      claimedSeasonRewards: [...currentWallet.claimedSeasonRewards, reward.id],
+    };
 
-      return {
-        ...currentWallet,
-        coins: currentWallet.coins + (reward.coins ?? 0),
-        ownedCardBackIds,
-        ownedAvatarFrameIds,
-        ownedTableSkinIds,
-        claimedSeasonRewards: [
-          ...currentWallet.claimedSeasonRewards,
-          reward.id,
-        ],
-      };
-    });
+    walletRef.current = nextWallet;
+    setWallet(nextWallet);
     setNotice(`${reward.title} geclaimd.`);
   }
 
@@ -653,19 +683,21 @@ export function useEconomy() {
 
     if (!reward) return;
 
-    if (wallet.claimedMilestoneRewards.includes(reward.id)) {
+    const currentWallet = walletRef.current;
+
+    if (currentWallet.claimedMilestoneRewards.includes(reward.id)) {
       setNotice("Dit doel is al geclaimd.");
       return;
     }
 
-    const progress = getMilestoneProgress(wallet, reward);
+    const progress = getMilestoneProgress(currentWallet, reward);
 
     if (progress < reward.target) {
       setNotice(`Nog ${reward.target - progress} stap te gaan voor ${reward.title}.`);
       return;
     }
 
-    setWallet((currentWallet) => ({
+    const nextWallet = {
       ...currentWallet,
       coins: currentWallet.coins + (reward.coins ?? 0),
       gems: currentWallet.gems + (reward.gems ?? 0),
@@ -673,7 +705,10 @@ export function useEconomy() {
         ...currentWallet.claimedMilestoneRewards,
         reward.id,
       ],
-    }));
+    };
+
+    walletRef.current = nextWallet;
+    setWallet(nextWallet);
 
     const rewards = [
       reward.coins ? `+${reward.coins} coins` : null,

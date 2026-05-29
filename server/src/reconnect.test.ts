@@ -269,6 +269,19 @@ describe("socket reconnect recovery", () => {
     assert.equal(await error, "Je hebt minimaal 2 spelers nodig");
   });
 
+  it("rejects stale session recovery for a missing room", async () => {
+    const client = await connectClient();
+    const failed = waitForEvent(client, "reconnect_failed");
+
+    client.emit("recover_session", {
+      code: "ZZZZZ",
+      playerId: "missing-player",
+      name: "Stale",
+    });
+
+    await failed;
+  });
+
   it("quick play creates a public room and sends the next player into it", async () => {
     const first = await connectClient();
     const firstCreated = waitForEvent<SessionAck>(first, "room_created");
@@ -656,6 +669,117 @@ describe("socket reconnect recovery", () => {
       state.lastMessage,
       "Tafel teruggezet omdat er niet genoeg spelers over zijn."
     );
+  });
+
+  it("restores finished state when a player reconnects after game end", async () => {
+    const { code, host, guest, hostId, guestId } = await createTwoPlayerRoom();
+    await readyAndStartGame(host, guest);
+
+    const room = getRoomForTests(code);
+    assert.ok(room);
+    room.currentPlayerIndex = room.players.findIndex((player) => player.id === hostId);
+    room.discardPile = [makeCard("top", "5", "hearts")];
+    room.hands[hostId] = [makeCard("winner-card", "5", "clubs")];
+    room.hands[guestId] = [makeCard("guest-card", "9", "spades")];
+
+    const finished = waitForRoom(
+      guest,
+      (state) => state.turnState === "finished" && state.winnerId === hostId
+    );
+
+    host.emit("play_card", {
+      cardId: "winner-card",
+    });
+
+    await finished;
+    await disconnectAndObserve(guest, host, guestId);
+
+    const recovered = await recoverClient(code, guestId, "Guest");
+
+    assert.equal(recovered.room.turnState, "finished");
+    assert.equal(recovered.room.winnerId, hostId);
+    assert.equal(recovered.room.started, true);
+  });
+
+  it("blocks further card plays after a legal winner is declared", async () => {
+    const { code, host, guest, hostId, guestId } = await createTwoPlayerRoom();
+    await readyAndStartGame(host, guest);
+
+    const room = getRoomForTests(code);
+    assert.ok(room);
+    room.currentPlayerIndex = room.players.findIndex((player) => player.id === hostId);
+    room.discardPile = [makeCard("top", "5", "hearts")];
+    room.hands[hostId] = [makeCard("winner-card", "5", "clubs")];
+    room.hands[guestId] = [makeCard("guest-card", "5", "spades")];
+
+    const finished = waitForRoom(
+      guest,
+      (state) => state.turnState === "finished" && state.winnerId === hostId
+    );
+
+    host.emit("play_card", {
+      cardId: "winner-card",
+    });
+
+    await finished;
+
+    const error = waitForEvent<string>(
+      guest,
+      "error_message",
+      (message) => message === "Game is al klaar"
+    );
+
+    guest.emit("play_card", {
+      cardId: "guest-card",
+    });
+
+    assert.equal(await error, "Game is al klaar");
+  });
+
+  it("resets a finished game to lobby when a player asks for another round", async () => {
+    const { code, host, guest, hostId, guestId } = await createTwoPlayerRoom();
+    await readyAndStartGame(host, guest);
+
+    const room = getRoomForTests(code);
+    assert.ok(room);
+    room.currentPlayerIndex = room.players.findIndex((player) => player.id === hostId);
+    room.discardPile = [makeCard("top", "5", "hearts")];
+    room.hands[hostId] = [makeCard("winner-card", "5", "clubs")];
+    room.hands[guestId] = [makeCard("guest-card", "9", "spades")];
+
+    const finished = waitForRoom(
+      guest,
+      (state) => state.turnState === "finished" && state.winnerId === hostId
+    );
+
+    host.emit("play_card", {
+      cardId: "winner-card",
+    });
+
+    await finished;
+
+    const lobby = waitForRoom(
+      guest,
+      (state) =>
+        !state.started &&
+        state.turnState === "normal" &&
+        state.winnerId === undefined &&
+        state.hand.length === 0
+    );
+
+    host.emit("play_again_response", {
+      wantsAgain: true,
+    });
+
+    const state = await lobby;
+
+    assert.equal(state.lastMessage, "Host wil nog een potje. De host kan opnieuw starten.");
+
+    const restarted = waitForRoom(guest, (roomState) => roomState.started);
+
+    host.emit("start_game");
+
+    assert.equal((await restarted).turnState, "normal");
   });
 
   it("runs the basic room flow and sends both players state", async () => {

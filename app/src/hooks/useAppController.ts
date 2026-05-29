@@ -13,7 +13,7 @@ import {
 import { useAppSettings } from "../settings";
 import { getTableSkinOption } from "../tableSkins";
 import type { Card, Suit } from "../types";
-import { useEconomy } from "./useEconomy";
+import { getGameResultReward, useEconomy } from "./useEconomy";
 import { useRoomSocket } from "./useRoomSocket";
 
 export function useAppController() {
@@ -81,6 +81,7 @@ export function useAppController() {
   const isHost = room?.hostId === playerId;
   const isYourTurn = room?.currentPlayerId === playerId;
   const roundFinished = room?.turnState === "finished";
+  const myRoomPlayer = room?.players.find((player) => player.id === playerId);
   const winner = roundFinished
     ? room?.players.find((player) => player.id === room.winnerId)
     : undefined;
@@ -96,6 +97,23 @@ export function useAppController() {
   const selectedAvatarFrame = getAvatarFrameOption(wallet.selectedAvatarFrameId);
   const [recentPlayers, setRecentPlayers] = useState<RecentPlayer[]>([]);
   const recentRoundRef = useRef<string | null>(null);
+  const finishRewards = useMemo(() => {
+    if (!room?.winnerId || room.turnState !== "finished" || !myRoomPlayer?.inRound) {
+      return undefined;
+    }
+
+    const didWin = room.winnerId === playerId;
+    const reward = getGameResultReward(didWin);
+
+    return {
+      ...reward,
+      didWin,
+      resultLabel: didWin ? "Jij hebt gewonnen" : "Je bent tweede/verloren",
+      missionText: didWin
+        ? "Missies bijgewerkt: Speel 1 potje en Win 1 potje."
+        : "Missies bijgewerkt: Speel 1 potje.",
+    };
+  }, [myRoomPlayer?.inRound, playerId, room?.turnState, room?.winnerId]);
   const profileFoundation = useMemo(
     () =>
       buildProfileFoundation({
@@ -148,9 +166,11 @@ export function useAppController() {
 
   useEffect(() => {
     if (!room?.winnerId || room.turnState !== "finished" || !room.roundId) return;
+    if (!myRoomPlayer?.inRound) return;
 
     recordGameResult(`${room.code}-${room.roundId}`, room.winnerId === playerId);
   }, [
+    myRoomPlayer?.inRound,
     playerId,
     recordGameResult,
     room?.code,
@@ -171,6 +191,7 @@ export function useAppController() {
 
   useEffect(() => {
     if (!room?.winnerId || room.turnState !== "finished" || !room.roundId) return;
+    if (!myRoomPlayer?.inRound) return;
 
     const roundKey = `${room.code}-${room.roundId}`;
 
@@ -210,6 +231,7 @@ export function useAppController() {
       return merged;
     });
   }, [
+    myRoomPlayer?.inRound,
     playerId,
     room?.code,
     room?.players,
@@ -319,6 +341,7 @@ export function useAppController() {
           isYourTurn: Boolean(isYourTurn),
           winnerName: winner?.name,
           loserName: loser?.name,
+          finishRewards,
           drawCards,
           passTurn,
           playCard: playCardWithTracking,

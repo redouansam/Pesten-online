@@ -13,6 +13,7 @@ export type Wallet = {
   ownedTableSkinIds: string[];
   gamesPlayed: number;
   wins: number;
+  losses: number;
   pestCardsPlayed: number;
   dailyMissionDate?: string;
   dailyMissionClaims: string[];
@@ -68,8 +69,8 @@ export const GEM_PACK_COST = 10;
 export const DAILY_LOGIN_COINS = 25;
 export const DAILY_GEMS = 3;
 export const GAME_PLAYED_COINS = 10;
-export const GAME_WIN_COINS = 30;
-export const GAME_PLAYED_XP = 60;
+export const GAME_WIN_COINS = 25;
+export const GAME_PLAYED_XP = 20;
 export const GAME_WIN_XP = 40;
 export const XP_PER_SEASON_LEVEL = 100;
 
@@ -88,6 +89,7 @@ export const defaultWallet: Wallet = {
   ownedTableSkinIds: ["royal-green"],
   gamesPlayed: 0,
   wins: 0,
+  losses: 0,
   pestCardsPlayed: 0,
   dailyMissionClaims: [],
   dailyGamesPlayed: 0,

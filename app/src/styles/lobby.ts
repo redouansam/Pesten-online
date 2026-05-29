@@ -14,10 +14,10 @@ export const lobbyStyles = StyleSheet.create({
     justifyContent: "flex-start",
     paddingHorizontal: 0,
     paddingTop: 0,
-    paddingBottom: 118,
+    paddingBottom: 80,
   },
   homeScrollCompact: {
-    paddingBottom: 112,
+    paddingBottom: 80,
   },
   homeCard: {
     width: "100%",

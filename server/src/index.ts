@@ -1128,24 +1128,13 @@ io.on("connection", (socket) => {
 
     if (room.turnState !== "finished") return;
 
-    room.rematchVotes[playerId] = wantsAgain;
+    const player = room.players.find((item) => item.id === playerId);
+    const playerName = player?.name ?? "Een speler";
 
-    if (!wantsAgain) {
-      resetToLobby(room);
-      sendRoomUpdate(roomCode);
-      return;
-    }
-
-    const activePlayers = room.players.filter((player) => player.connected);
-    const allAnsweredYes =
-      activePlayers.length >= 2 &&
-      activePlayers.every((player) => room.rematchVotes[player.id] === true);
-
-    if (allAnsweredYes) {
-      startGame(room);
-      sendRoomUpdate(roomCode);
-      return;
-    }
+    resetToLobby(room);
+    room.lastMessage = wantsAgain
+      ? `${playerName} wil nog een potje. De host kan opnieuw starten.`
+      : `${playerName} ging terug naar de lobby.`;
 
     sendRoomUpdate(roomCode);
   });

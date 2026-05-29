@@ -47,7 +47,7 @@ export function buildProfileFoundation({
     playerId,
     playerName: name,
     wins: wallet.wins,
-    losses: Math.max(0, wallet.gamesPlayed - wallet.wins),
+    losses: wallet.losses,
     gamesPlayed: wallet.gamesPlayed,
     favoriteCardback: wallet.selectedCardBackId,
     level,
