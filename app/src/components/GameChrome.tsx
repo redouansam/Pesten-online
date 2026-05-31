@@ -124,7 +124,7 @@ export function PlayerHeader({
             {name}
           </Text>
           <View style={styles.gamePlayerMetaRow}>
-            <Text style={styles.gamePlayerLevel}>Lv {level}</Text>
+            <Text style={styles.gamePlayerLevel}>Niv. {level}</Text>
             <View style={styles.gamePlayerXpTrack}>
               <View
                 style={[
@@ -392,7 +392,7 @@ export function BottomNav({
     onPress: () => void;
     badge?: boolean;
   }> = [
-    { key: "shop", label: "Shop", icon: "$", onPress: onShop, badge: shopBadge },
+    { key: "shop", label: "Markt", icon: "$", onPress: onShop, badge: shopBadge },
     {
       key: "social",
       label: "Sociaal",

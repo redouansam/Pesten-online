@@ -1,9 +1,41 @@
+import type { LoginProvider } from "./onboarding";
+
 export type PlatformFeatureKey =
   | "matchmaking"
   | "publicRooms"
   | "friends"
   | "invites"
   | "profiles";
+
+export type HubPlayModeKey =
+  | "quick"
+  | "friends"
+  | "publicRooms"
+  | "ranked"
+  | "tournament";
+
+export type HubPlayMode = {
+  key: HubPlayModeKey;
+  title: string;
+  subtitle: string;
+  icon: string;
+  badge?: string;
+  tone: "blue" | "purple" | "gold";
+  availability: "live" | "locked";
+};
+
+export type PlatformLoginPlaceholder = {
+  provider: Exclude<LoginProvider, "guest">;
+  title: string;
+  subtitle: string;
+};
+
+export type MonetizationPlaceholder = {
+  key: "rewardedAds" | "premiumPass" | "gemPacks" | "coinPacks" | "cosmetics";
+  title: string;
+  text: string;
+  actionLabel: string;
+};
 
 export type PlatformFeatureCard = {
   key: PlatformFeatureKey;
@@ -57,7 +89,7 @@ export const platformFeatureCards: PlatformFeatureCard[] = [
   {
     key: "publicRooms",
     title: "Open tafels",
-    subtitle: "Publieke kamers",
+    subtitle: "Publieke tafels",
     icon: "4",
     badge: "Live",
     tone: "gold",
@@ -65,14 +97,14 @@ export const platformFeatureCards: PlatformFeatureCard[] = [
   {
     key: "friends",
     title: "Vrienden",
-    subtitle: "Profielen & invites",
+    subtitle: "Profielen en uitnodigingen",
     icon: "+",
     badge: "2",
     tone: "purple",
   },
   {
     key: "invites",
-    title: "Invites",
+    title: "Uitnodigingen",
     subtitle: "Direct uitnodigen",
     icon: "@",
     tone: "blue",
@@ -80,7 +112,7 @@ export const platformFeatureCards: PlatformFeatureCard[] = [
   {
     key: "profiles",
     title: "Profiel",
-    subtitle: "Stats & badges",
+    subtitle: "Statistieken en badges",
     icon: "?",
     tone: "gold",
   },
@@ -99,7 +131,7 @@ export const socialActions: SocialAction[] = [
   },
   {
     key: "friends",
-    label: "Invite",
+    label: "Uitnodigen",
     icon: "+",
   },
   {
@@ -114,6 +146,100 @@ export const socialActions: SocialAction[] = [
   },
 ];
 
+export const hubPlayModes: HubPlayMode[] = [
+  {
+    key: "quick",
+    title: "Snelspel",
+    subtitle: "Vind automatisch een open tafel",
+    icon: "NL",
+    badge: "Live",
+    tone: "blue",
+    availability: "live",
+  },
+  {
+    key: "friends",
+    title: "Vriendentafel",
+    subtitle: "Maak een privetafel met code",
+    icon: "P",
+    badge: "Code",
+    tone: "gold",
+    availability: "live",
+  },
+  {
+    key: "publicRooms",
+    title: "Open tafels",
+    subtitle: "Bekijk publieke tafels",
+    icon: "4",
+    badge: "Live",
+    tone: "gold",
+    availability: "live",
+  },
+  {
+    key: "ranked",
+    title: "Liga",
+    subtitle: "Ranked seizoenen komen later",
+    icon: "L",
+    badge: "Later",
+    tone: "purple",
+    availability: "locked",
+  },
+  {
+    key: "tournament",
+    title: "Toernooi",
+    subtitle: "Toernooien komen later",
+    icon: "T",
+    badge: "Later",
+    tone: "gold",
+    availability: "locked",
+  },
+];
+
+export const platformLoginPlaceholders: PlatformLoginPlaceholder[] = [
+  {
+    provider: "apple",
+    title: "Log in met Apple",
+    subtitle: "Binnenkort beschikbaar in de app-release",
+  },
+  {
+    provider: "google",
+    title: "Google Play Games",
+    subtitle: "Binnenkort beschikbaar in de app-release",
+  },
+];
+
+export const monetizationPlaceholders: MonetizationPlaceholder[] = [
+  {
+    key: "rewardedAds",
+    title: "Beloningsadvertenties",
+    text: "Advertenties later beschikbaar, geen trackingprompt nu.",
+    actionLabel: "Later beschikbaar",
+  },
+  {
+    key: "premiumPass",
+    title: "Premium pass",
+    text: "Voorbeeld van kaartbacks, badges, extra missies en premium dagbeloning.",
+    actionLabel: "Binnenkort via App Store / Google Play",
+  },
+  {
+    key: "gemPacks",
+    title: "Gem-pakketten",
+    text: "Betaalde aankopen worden pas gekoppeld in de app-release.",
+    actionLabel: "Binnenkort via App Store / Google Play",
+  },
+  {
+    key: "coinPacks",
+    title: "Coin-pakketten",
+    text: "Valuta-shop is voorbereid zonder echte betaling.",
+    actionLabel: "Binnenkort via App Store / Google Play",
+  },
+  {
+    key: "cosmetics",
+    title: "Cosmetica",
+    text: "Kaartbacks, tafels, avatars en frames zijn uitbreidbaar.",
+    actionLabel: "Bekijk markt",
+  },
+];
+
 export const publicRoomPreviews: PublicRoomPreview[] = [
   {
     id: "casual-nl",
@@ -122,7 +248,7 @@ export const publicRoomPreviews: PublicRoomPreview[] = [
     region: "Nederland",
     seatsTaken: 2,
     seatsTotal: 4,
-    statusLabel: "Preview",
+    statusLabel: "Voorbeeld",
   },
   {
     id: "fast-table",
@@ -131,25 +257,25 @@ export const publicRoomPreviews: PublicRoomPreview[] = [
     region: "Europa",
     seatsTaken: 1,
     seatsTotal: 4,
-    statusLabel: "Soon",
+    statusLabel: "Binnenkort",
   },
 ];
 
 export const previewFriends: PreviewFriend[] = [
   {
     name: "Rival_24",
-    status: "Online - invite klaar",
-    cta: "Invite",
+    status: "Online - uitnodiging klaar",
+    cta: "Uitnodigen",
   },
   {
     name: "Kaartbaas",
     status: "Profiel bekijken",
-    cta: "Soon",
+    cta: "Binnenkort",
   },
   {
     name: "Nieuwe speler",
     status: "Na potje toevoegen",
-    cta: "Soon",
+    cta: "Binnenkort",
   },
 ];
 
@@ -159,5 +285,9 @@ export const matchmakingPreview: MatchmakingPreview = {
   ruleset: "Casual tafel",
   estimatedWaitSeconds: 30,
   statusLabel: "Live",
-  steps: ["Zoek open tafels", "Maak tafel als nodig", "Voeg leuke spelers later toe"],
+  steps: [
+    "Zoek open tafels",
+    "Maak een tafel als dat nodig is",
+    "Voeg leuke spelers later toe",
+  ],
 };

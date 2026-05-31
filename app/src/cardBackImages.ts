@@ -19,14 +19,14 @@ export const cardBackOptions: CardBackOption[] = [
   {
     id: "classic-blue",
     title: "Classic Blue",
-    description: "De standaard online tafel-look.",
+    description: "De standaard online tafelstijl.",
     rarity: "Starter",
     image: require("../assets/card backs/card-back-blue.png"),
   },
   {
     id: "classic-red",
     title: "Classic Red",
-    description: "Een klassieke rode back voor vaste spelers.",
+    description: "Een klassieke rode kaartback voor vaste spelers.",
     rarity: "Rare",
     image: require("../assets/card backs/card-back-red.png"),
     unlockLevel: 5,
@@ -58,7 +58,7 @@ export const cardBackOptions: CardBackOption[] = [
   {
     id: "violet-royal",
     title: "Violet Royal",
-    description: "Een premium-feeling paarse back zonder premium pass.",
+    description: "Een paarse kaartback met premium gevoel, zonder premium pass.",
     rarity: "Rare",
     image: require("../assets/card backs/card-back-purple.png"),
     priceCoins: 300,
@@ -66,7 +66,7 @@ export const cardBackOptions: CardBackOption[] = [
   {
     id: "black-gold-stars",
     title: "Black Gold",
-    description: "Gouden sterren op zwart, gemaakt voor win streaks.",
+    description: "Gouden sterren op zwart, gemaakt voor winreeksen.",
     rarity: "Premium",
     image: require("../assets/card backs/black-gold-stars.jpg"),
     premium: true,
@@ -98,7 +98,7 @@ export const cardBackOptions: CardBackOption[] = [
   {
     id: "mint-radiance",
     title: "Mint Radiance",
-    description: "Frisse mint-look met een zachte kaarttafel vibe.",
+    description: "Frisse mintstijl met een zachte kaarttafelsfeer.",
     rarity: "Premium",
     image: require("../assets/card backs/mint-radiance.jpg"),
     premium: true,
@@ -114,7 +114,7 @@ export const cardBackOptions: CardBackOption[] = [
   {
     id: "purple-lattice",
     title: "Purple Lattice",
-    description: "Diep paars raster met een echte collector-look.",
+    description: "Diep paars raster met een echte verzamelaarstijl.",
     rarity: "Premium",
     image: require("../assets/card backs/purple-lattice.jpg"),
     premium: true,
@@ -130,7 +130,7 @@ export const cardBackOptions: CardBackOption[] = [
   {
     id: "rose-cube-pattern",
     title: "Rose Cubes",
-    description: "Zachte rose pattern, clean en classy.",
+    description: "Zacht rozepatroon, strak en stijlvol.",
     rarity: "Premium",
     image: require("../assets/card backs/rose-cube-pattern.jpg"),
     premium: true,

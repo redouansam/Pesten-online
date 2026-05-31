@@ -4,6 +4,8 @@ import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 
 import { GameTable } from "./src/components/GameTable";
 import { LobbyScreen } from "./src/components/LobbyScreen";
+import { OnboardingScreen } from "./src/components/OnboardingScreen";
+import { TutorialScreen } from "./src/components/TutorialScreen";
 import { WaitingRoom } from "./src/components/WaitingRoom";
 import { useAppController } from "./src/hooks/useAppController";
 import { styles } from "./src/styles";
@@ -12,6 +14,10 @@ export default function App() {
   const {
     screenAnim,
     screenKey,
+    showOnboarding,
+    showTutorial,
+    onboardingProps,
+    tutorialProps,
     room,
     lobbyProps,
     gameProps,
@@ -54,7 +60,11 @@ export default function App() {
               },
             ]}
           >
-            {!room ? (
+            {showTutorial ? (
+              <TutorialScreen {...tutorialProps} />
+            ) : showOnboarding ? (
+              <OnboardingScreen {...onboardingProps} />
+            ) : !room ? (
               <LobbyScreen {...lobbyProps} />
             ) : room.started && gameProps ? (
               <GameTable {...gameProps} />

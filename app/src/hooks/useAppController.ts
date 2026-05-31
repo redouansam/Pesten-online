@@ -10,6 +10,7 @@ import {
   RecentPlayer,
   buildProfileFoundation,
 } from "../profileFoundation";
+import { useOnboardingState } from "../onboarding";
 import { useAppSettings } from "../settings";
 import { getTableSkinOption } from "../tableSkins";
 import type { Card, Suit } from "../types";
@@ -18,6 +19,7 @@ import { useRoomSocket } from "./useRoomSocket";
 
 export function useAppController() {
   const { settings, updateSettings } = useAppSettings();
+  const onboarding = useOnboardingState();
   const {
     connected,
     connectionState,
@@ -32,6 +34,8 @@ export function useAppController() {
     matchmakingStatus,
     pendingAction,
     errorMessage,
+    redrawSuccess,
+    clearRedrawSuccess,
     clearError,
     retryConnection,
     createRoom,
@@ -48,7 +52,10 @@ export function useAppController() {
     redrawDrawnCard,
     sortHand,
     playAgain,
-  } = useRoomSocket(settings.hapticsEnabled);
+  } = useRoomSocket(
+    settings.hapticsEnabled,
+    onboarding.hasCompletedOnboarding
+  );
   const {
     wallet,
     season,
@@ -58,11 +65,11 @@ export function useAppController() {
     spendCoins,
     refundCoins,
     spendGems,
-    refundGems,
     buyCoinsWithGems,
     claimDailyGems,
     previewPremiumPass,
     previewGemPurchase,
+    previewRewardedAd,
     buyCardBack,
     selectCardBack,
     buyTableSkin,
@@ -91,11 +98,12 @@ export function useAppController() {
   const screenKey = !room ? "home" : room.started ? "game" : "room";
   const screenAnim = useRef(new Animated.Value(1)).current;
   const pendingEntrySpendRef = useRef(false);
-  const pendingRedrawSpendRef = useRef(false);
+  const processedRedrawRequestsRef = useRef<Set<string>>(new Set());
   const selectedTableSkin = getTableSkinOption(wallet.selectedTableSkinId);
   const selectedAvatar = getAvatarOption(wallet.selectedAvatarId);
   const selectedAvatarFrame = getAvatarFrameOption(wallet.selectedAvatarFrameId);
   const [recentPlayers, setRecentPlayers] = useState<RecentPlayer[]>([]);
+  const [showTutorial, setShowTutorial] = useState(false);
   const recentRoundRef = useRef<string | null>(null);
   const finishRewards = useMemo(() => {
     if (!room?.winnerId || room.turnState !== "finished" || !myRoomPlayer?.inRound) {
@@ -118,13 +126,28 @@ export function useAppController() {
     () =>
       buildProfileFoundation({
         connected,
+        identity: onboarding.identity,
         level: season.level,
         name,
         playerId,
         wallet,
       }),
-    [connected, name, playerId, season.level, wallet]
+    [connected, name, onboarding.identity, playerId, season.level, wallet]
   );
+  const showOnboarding =
+    !onboarding.isLoading && !onboarding.hasCompletedOnboarding;
+  const shouldForceTutorial =
+    !onboarding.isLoading &&
+    onboarding.hasCompletedOnboarding &&
+    !onboarding.identity?.hasCompletedTutorial;
+  const shouldShowTutorial = showTutorial || shouldForceTutorial;
+  const effectiveScreenKey = onboarding.isLoading
+    ? "onboarding-loading"
+    : shouldShowTutorial
+    ? "tutorial"
+    : showOnboarding
+    ? "onboarding"
+    : screenKey;
 
   useEffect(() => {
     screenAnim.setValue(0);
@@ -134,7 +157,7 @@ export function useAppController() {
       duration: settings.motionLevel === "low" ? 120 : 240,
       useNativeDriver: true,
     }).start();
-  }, [screenAnim, screenKey, settings.motionLevel]);
+  }, [effectiveScreenKey, screenAnim, settings.motionLevel]);
 
   useEffect(() => {
     if (!room || !pendingEntrySpendRef.current) return;
@@ -149,20 +172,22 @@ export function useAppController() {
       pendingEntrySpendRef.current = false;
       refundCoins(MATCH_ENTRY_COINS);
     }
-
-    if (pendingRedrawSpendRef.current) {
-      pendingRedrawSpendRef.current = false;
-      refundGems(room?.redrawCostGems ?? REDRAW_COST_GEMS);
-    }
-  }, [errorMessage, refundCoins, refundGems, room?.redrawCostGems]);
+  }, [errorMessage, refundCoins]);
 
   useEffect(() => {
-    if (pendingAction !== null || errorMessage || !pendingRedrawSpendRef.current) {
-      return;
+    if (!redrawSuccess) return;
+
+    const requestKey =
+      redrawSuccess.requestId ??
+      `${redrawSuccess.offerId ?? "redraw"}-${redrawSuccess.costGems}`;
+
+    if (!processedRedrawRequestsRef.current.has(requestKey)) {
+      processedRedrawRequestsRef.current.add(requestKey);
+      spendGems(redrawSuccess.costGems, "Opnieuw trekken");
     }
 
-    pendingRedrawSpendRef.current = false;
-  }, [errorMessage, pendingAction, room?.lastMessage]);
+    clearRedrawSuccess();
+  }, [clearRedrawSuccess, redrawSuccess, spendGems]);
 
   useEffect(() => {
     if (!room?.winnerId || room.turnState !== "finished" || !room.roundId) return;
@@ -271,10 +296,18 @@ export function useAppController() {
   function redrawDrawnCardWithGems() {
     const redrawCost = room?.redrawCostGems ?? REDRAW_COST_GEMS;
 
-    if (!spendGems(redrawCost, "Nieuwe pakkaart")) return;
+    if (!room?.canRedrawDrawnCard || !room.redrawOfferId) return;
 
-    pendingRedrawSpendRef.current = true;
-    redrawDrawnCard();
+    if (wallet.gems < redrawCost) {
+      spendGems(redrawCost, "Opnieuw trekken");
+      return;
+    }
+
+    redrawDrawnCard({
+      requestId: `${Date.now()}-${room.redrawOfferId}`,
+      offerId: room.redrawOfferId,
+      availableGems: wallet.gems,
+    });
   }
 
   function playCardWithTracking(card: Card, chosenSuit?: Suit) {
@@ -285,9 +318,50 @@ export function useAppController() {
     playCard(card, chosenSuit);
   }
 
+  async function completeGuestOnboarding(acceptedTerms: boolean) {
+    const completedIdentity = await onboarding.completeGuestOnboarding(
+      acceptedTerms
+    );
+
+    if (completedIdentity && !hasSavedName) {
+      const suffix = completedIdentity.guestId.slice(-4).toUpperCase();
+      setName(`Gast${suffix}`);
+    }
+
+    if (completedIdentity && !completedIdentity.hasCompletedTutorial) {
+      setShowTutorial(true);
+    }
+
+    return completedIdentity;
+  }
+
+  async function completeTutorial() {
+    await onboarding.completeTutorial();
+    setShowTutorial(false);
+  }
+
+  function openTutorial() {
+    setShowTutorial(true);
+  }
+
   return {
     screenAnim,
-    screenKey,
+    screenKey: effectiveScreenKey,
+    showOnboarding: onboarding.isLoading || showOnboarding,
+    showTutorial: shouldShowTutorial,
+    onboardingProps: {
+      isLoading: onboarding.isLoading,
+      notice: onboarding.notice,
+      onClearNotice: onboarding.clearNotice,
+      onContinueAsGuest: completeGuestOnboarding,
+      onOpenTutorial: openTutorial,
+      onShowLegal: onboarding.showLegalPlaceholder,
+      onShowPlatformPlaceholder: onboarding.showPlatformPlaceholder,
+    },
+    tutorialProps: {
+      onComplete: completeTutorial,
+      onSkip: completeTutorial,
+    },
     room,
     lobbyProps: {
       name,
@@ -322,6 +396,7 @@ export function useAppController() {
       canClaimDailyGems,
       previewPremiumPass,
       previewGemPurchase,
+      previewRewardedAd,
       buyCardBack,
       selectCardBack,
       buyTableSkin,
@@ -333,6 +408,7 @@ export function useAppController() {
       claimDailyMission,
       claimSeasonReward,
       claimMilestoneReward,
+      openTutorial,
     },
     gameProps: room
       ? {

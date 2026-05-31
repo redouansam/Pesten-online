@@ -726,14 +726,14 @@ describe("socket reconnect recovery", () => {
     const error = waitForEvent<string>(
       guest,
       "error_message",
-      (message) => message === "Game is al klaar"
+      (message) => message === "Spel is al klaar"
     );
 
     guest.emit("play_card", {
       cardId: "guest-card",
     });
 
-    assert.equal(await error, "Game is al klaar");
+    assert.equal(await error, "Spel is al klaar");
   });
 
   it("resets a finished game to lobby when a player asks for another round", async () => {

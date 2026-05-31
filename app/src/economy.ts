@@ -63,7 +63,7 @@ export type DailyMission = {
 };
 
 export const MATCH_ENTRY_COINS = 10;
-export const REDRAW_COST_GEMS = 5;
+export const REDRAW_COST_GEMS = 3;
 export const COINS_PER_GEM_PACK = 100;
 export const GEM_PACK_COST = 10;
 export const DAILY_LOGIN_COINS = 25;
@@ -107,28 +107,28 @@ export const seasonRewards: SeasonReward[] = [
     id: "level-1-coins",
     level: 1,
     title: "100 coins",
-    description: "Startbonus voor Season 1.",
+    description: "Startbonus voor seizoen 1.",
     coins: 100,
   },
   {
     id: "level-5-red-cardback",
     level: 5,
     title: "Rode kaartback",
-    description: "Cosmetic reward.",
+    description: "Cosmetische beloning.",
     cardBackId: "classic-red",
   },
   {
     id: "level-10-gold-frame",
     level: 10,
     title: "Gouden avatar frame",
-    description: "Premium cosmetic.",
+    description: "Premium cosmetica.",
     avatarFrameId: "gold",
   },
   {
     id: "level-20-premium-table",
     level: 20,
     title: "Premium tafel",
-    description: "Royal Table skin.",
+    description: "Premium tafelstijl.",
     premium: true,
     tableSkinId: "midnight-premium",
   },
@@ -183,7 +183,7 @@ export const milestoneRewards: MilestoneReward[] = [
   },
   {
     id: "collector-3",
-    title: "Collector",
+    title: "Verzamelaar",
     description: "Bezit 3 kaartbacks.",
     metric: "cardBacks",
     target: 3,
@@ -191,7 +191,7 @@ export const milestoneRewards: MilestoneReward[] = [
   },
   {
     id: "streak-2",
-    title: "Hot streak",
+    title: "Winreeks",
     description: "Win 2 potjes achter elkaar.",
     metric: "bestWinStreak",
     target: 2,

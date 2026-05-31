@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  canRedrawLastDrawnCard,
   canPlayCard,
   createRoom,
   drawCards,
   getCurrentPlayer,
   getPublicRoomState,
+  getRedrawCost,
   passTurn,
   playBotTurn,
   playCard,
@@ -59,6 +61,18 @@ function makeRoom(playerCount = 3): GameRoom {
   room.currentPlayerIndex = 0;
 
   return room;
+}
+
+function getAllCards(room: GameRoom) {
+  return [
+    ...room.deck,
+    ...room.discardPile,
+    ...Object.values(room.hands).flat(),
+  ];
+}
+
+function countCard(room: GameRoom, cardId: string) {
+  return getAllCards(room).filter((card) => card.id === cardId).length;
 }
 
 describe("game rules", () => {
@@ -609,7 +623,7 @@ describe("game rules", () => {
     assert.equal(room.sevenStopAfterNext, true);
     assert.equal(publicRoom.canDraw, true);
     assert.equal(publicRoom.canPass, false);
-    assert.throws(() => passTurn(room, "1"), /nadat je hebt gepakt/);
+    assert.throws(() => passTurn(room, "1"), /nadat je een kaart hebt getrokken/);
 
     drawCards(room, "1");
 
@@ -668,7 +682,7 @@ describe("game rules", () => {
     assert.equal(room.turnState, "must_play");
     assert.equal(publicRoom.canDraw, true);
     assert.equal(publicRoom.canPass, false);
-    assert.throws(() => passTurn(room, "1"), /nadat je hebt gepakt/);
+    assert.throws(() => passTurn(room, "1"), /nadat je een kaart hebt getrokken/);
 
     drawCards(room, "1");
 
@@ -814,7 +828,7 @@ describe("game rules", () => {
 
     assert.throws(
       () => playCard(room, "2", "p2-out"),
-      /Game is al klaar/
+      /Spel is al klaar/
     );
   });
 
@@ -863,7 +877,10 @@ describe("game rules", () => {
     room.redrawOffer = {
       playerId: "1",
       cardId: "drawn",
-      attempts: 1,
+      offerId: "old-offer",
+    };
+    room.redrawCounts = {
+      "1": 2,
     };
     room.rematchVotes = {
       "1": true,
@@ -881,6 +898,7 @@ describe("game rules", () => {
     assert.equal(room.sevenSuit, undefined);
     assert.equal(room.sevenStopAfterNext, false);
     assert.equal(room.redrawOffer, undefined);
+    assert.deepEqual(room.redrawCounts, {});
     assert.equal(room.winnerId, undefined);
     assert.equal(room.loserId, undefined);
     assert.deepEqual(room.rematchVotes, {});
@@ -914,7 +932,7 @@ describe("game rules", () => {
     assert.equal(room.discardPile.length, 1);
   });
 
-  it("offers a gem redraw when a normal draw is not playable", () => {
+  it("offers a gem redraw after a normal draw and replaces only that card", () => {
     const room = makeRoom(2);
 
     room.discardPile = [makeCard("top", "5", "hearts")];
@@ -926,16 +944,262 @@ describe("game rules", () => {
 
     drawCards(room, "1");
 
+    const offerId = room.redrawOffer?.offerId;
+    const totalCardCount = getAllCards(room).length;
+
     assert.equal(room.turnState, "after_draw");
     assert.equal(room.redrawOffer?.cardId, "bad-draw");
+    assert.equal(room.redrawOffer?.playerId, "1");
+    assert.equal(typeof offerId, "string");
+    assert.equal(getRedrawCost(room, "1"), 3);
+    assert.equal(canRedrawLastDrawnCard(room, "1", { offerId }), true);
     assert.equal(getCurrentPlayer(room)?.id, "1");
 
-    redrawDrawnCard(room, "1");
+    const result = redrawDrawnCard(room, "1", {
+      offerId,
+      availableGems: 25,
+    });
 
-    assert.equal(room.redrawOffer, undefined);
+    assert.equal(result.costGems, 3);
+    assert.equal(room.redrawOffer?.cardId, "good-draw");
+    assert.equal(getRedrawCost(room, "1"), 5);
+    assert.equal(getAllCards(room).length, totalCardCount);
     assert.equal(room.hands["1"].some((card) => card.id === "bad-draw"), false);
     assert.equal(room.hands["1"].some((card) => card.id === "good-draw"), true);
+    assert.equal(countCard(room, "bad-draw"), 1);
+    assert.equal(countCard(room, "good-draw"), 1);
     assert.equal(getCurrentPlayer(room)?.id, "1");
+  });
+
+  it("increases redraw cost per player within the same match", () => {
+    const room = makeRoom(2);
+
+    room.discardPile = [makeCard("top", "5", "hearts")];
+    room.hands["1"] = [makeCard("hand", "9", "clubs")];
+    room.deck = [
+      makeCard("draw-1", "10", "spades"),
+      makeCard("draw-2", "9", "spades"),
+      makeCard("draw-3", "4", "clubs"),
+      makeCard("draw-4", "3", "diamonds"),
+    ];
+
+    drawCards(room, "1");
+
+    assert.equal(getRedrawCost(room, "1"), 3);
+
+    const first = redrawDrawnCard(room, "1", {
+      offerId: room.redrawOffer?.offerId,
+      availableGems: 25,
+    });
+
+    assert.equal(first.costGems, 3);
+    assert.equal(getRedrawCost(room, "1"), 5);
+
+    const second = redrawDrawnCard(room, "1", {
+      offerId: room.redrawOffer?.offerId,
+      availableGems: 25,
+    });
+
+    assert.equal(second.costGems, 5);
+    assert.equal(getRedrawCost(room, "1"), 7);
+
+    const third = redrawDrawnCard(room, "1", {
+      offerId: room.redrawOffer?.offerId,
+      availableGems: 25,
+    });
+
+    assert.equal(third.costGems, 7);
+    assert.equal(getRedrawCost(room, "1"), 9);
+  });
+
+  it("resets redraw cost when a new match starts", () => {
+    const room = makeRoom(2);
+
+    room.redrawCounts["1"] = 3;
+
+    assert.equal(getRedrawCost(room, "1"), 9);
+
+    startGame(room);
+
+    assert.equal(getRedrawCost(room, "1"), 3);
+    assert.deepEqual(room.redrawCounts, {});
+  });
+
+  it("rejects redraw when no normal draw just happened", () => {
+    const room = makeRoom(2);
+
+    assert.equal(canRedrawLastDrawnCard(room, "1"), false);
+    assert.throws(
+      () => redrawDrawnCard(room, "1"),
+      /Alleen direct na trekken|niet mogelijk/i
+    );
+  });
+
+  it("rejects redraw after playing the drawn card", () => {
+    const room = makeRoom(2);
+
+    room.discardPile = [makeCard("top", "5", "hearts")];
+    room.hands["1"] = [makeCard("keeper", "9", "clubs")];
+    room.deck = [makeCard("drawn", "5", "clubs")];
+
+    drawCards(room, "1");
+    const offerId = room.redrawOffer?.offerId;
+
+    playCard(room, "1", "drawn");
+
+    assert.equal(room.redrawOffer, undefined);
+    assert.throws(
+      () => redrawDrawnCard(room, "1", { offerId }),
+      /Alleen direct na trekken|niet aan de beurt/i
+    );
+  });
+
+  it("rejects redraw after passing the turn", () => {
+    const room = makeRoom(2);
+
+    room.discardPile = [makeCard("top", "5", "hearts")];
+    room.hands["1"] = [makeCard("keeper", "9", "clubs")];
+    room.deck = [makeCard("drawn", "10", "spades")];
+
+    drawCards(room, "1");
+    const offerId = room.redrawOffer?.offerId;
+
+    passTurn(room, "1");
+
+    assert.equal(room.redrawOffer, undefined);
+    assert.throws(
+      () => redrawDrawnCard(room, "1", { offerId }),
+      /niet aan de beurt|Alleen direct na trekken/i
+    );
+  });
+
+  it("does not offer redraw during pending draw penalties", () => {
+    const room = makeRoom(2);
+
+    room.pendingDraw = 2;
+    room.discardPile = [makeCard("top", "2", "hearts")];
+    room.hands["1"] = [makeCard("keeper", "9", "clubs")];
+    room.deck = [
+      makeCard("penalty-1", "10", "spades"),
+      makeCard("penalty-2", "9", "spades"),
+    ];
+
+    drawCards(room, "1");
+
+    assert.equal(room.redrawOffer, undefined);
+    assert.equal(getPublicRoomState(room, "1").canRedrawDrawnCard, false);
+  });
+
+  it("rejects redraw if it is not the player's turn", () => {
+    const room = makeRoom(2);
+
+    room.discardPile = [makeCard("top", "5", "hearts")];
+    room.hands["1"] = [makeCard("keeper", "9", "clubs")];
+    room.deck = [makeCard("drawn", "10", "spades")];
+
+    drawCards(room, "1");
+
+    assert.throws(() => redrawDrawnCard(room, "2"), /niet aan de beurt/i);
+  });
+
+  it("rejects redraw after the game is finished", () => {
+    const room = makeRoom(2);
+
+    room.turnState = "finished";
+    room.winnerId = "1";
+    room.redrawOffer = {
+      playerId: "1",
+      cardId: "drawn",
+      offerId: "finished-offer",
+    };
+
+    assert.throws(
+      () => redrawDrawnCard(room, "1", { offerId: "finished-offer" }),
+      /al klaar/i
+    );
+  });
+
+  it("rejects redraw when the player has too few gems", () => {
+    const room = makeRoom(2);
+
+    room.discardPile = [makeCard("top", "5", "hearts")];
+    room.hands["1"] = [makeCard("keeper", "9", "clubs")];
+    room.deck = [makeCard("drawn", "10", "spades")];
+
+    drawCards(room, "1");
+
+    assert.throws(
+      () =>
+        redrawDrawnCard(room, "1", {
+          offerId: room.redrawOffer?.offerId,
+          availableGems: 2,
+        }),
+      /Niet genoeg gems/
+    );
+    assert.equal(room.redrawCounts["1"] ?? 0, 0);
+    assert.equal(room.hands["1"].some((card) => card.id === "drawn"), true);
+  });
+
+  it("rejects duplicate redraw requests with a stale offer id", () => {
+    const room = makeRoom(2);
+
+    room.discardPile = [makeCard("top", "5", "hearts")];
+    room.hands["1"] = [makeCard("keeper", "9", "clubs")];
+    room.deck = [
+      makeCard("drawn", "10", "spades"),
+      makeCard("replacement", "9", "spades"),
+      makeCard("next", "4", "clubs"),
+    ];
+
+    drawCards(room, "1");
+    const staleOfferId = room.redrawOffer?.offerId;
+
+    redrawDrawnCard(room, "1", {
+      offerId: staleOfferId,
+      availableGems: 25,
+    });
+
+    assert.equal(room.redrawCounts["1"], 1);
+    assert.throws(
+      () =>
+        redrawDrawnCard(room, "1", {
+          offerId: staleOfferId,
+          availableGems: 25,
+        }),
+      /Alleen direct na trekken/i
+    );
+    assert.equal(room.redrawCounts["1"], 1);
+    assert.equal(room.hands["1"].length, 2);
+  });
+
+  it("does not allow stale reconnect redraw state after the offer changes", () => {
+    const room = makeRoom(2);
+
+    room.discardPile = [makeCard("top", "5", "hearts")];
+    room.hands["1"] = [makeCard("keeper", "9", "clubs")];
+    room.deck = [
+      makeCard("drawn", "10", "spades"),
+      makeCard("replacement", "9", "spades"),
+      makeCard("next", "4", "clubs"),
+    ];
+
+    drawCards(room, "1");
+    const reconnectState = getPublicRoomState(room, "1");
+
+    redrawDrawnCard(room, "1", {
+      offerId: reconnectState.redrawOfferId,
+      availableGems: 25,
+    });
+
+    assert.throws(
+      () =>
+        redrawDrawnCard(room, "1", {
+          offerId: reconnectState.redrawOfferId,
+          availableGems: 25,
+        }),
+      /Alleen direct na trekken/i
+    );
+    assert.equal(getPublicRoomState(room, "1").canRedrawDrawnCard, true);
   });
 
   it("sorts hands by suit or value depending on the requested mode", () => {

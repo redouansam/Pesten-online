@@ -32,8 +32,8 @@ export const starterAvatarFrameIds = [defaultAvatarFrameId];
 export const avatarOptions: AvatarOption[] = [
   {
     id: "initial",
-    title: "Initial",
-    description: "Je eigen beginletter, clean en duidelijk.",
+    title: "Beginletter",
+    description: "Je eigen beginletter, strak en duidelijk.",
     rarity: "Starter",
     badge: "",
     backgroundColor: "#c9a45c",
@@ -41,7 +41,7 @@ export const avatarOptions: AvatarOption[] = [
   },
   {
     id: "seven",
-    title: "Seven Player",
+    title: "7-speler",
     description: "Voor spelers die graag doorleggen.",
     rarity: "Common",
     badge: "7",
@@ -51,8 +51,8 @@ export const avatarOptions: AvatarOption[] = [
   },
   {
     id: "jack",
-    title: "Boer Boss",
-    description: "Suit control met een scherpe look.",
+    title: "Boerbaas",
+    description: "Symboolcontrole met een scherpe stijl.",
     rarity: "Rare",
     badge: "J",
     priceCoins: 220,
@@ -61,7 +61,7 @@ export const avatarOptions: AvatarOption[] = [
   },
   {
     id: "king",
-    title: "Royal King",
+    title: "Koninklijke Heer",
     description: "Een royale avatar voor de tafelbaas.",
     rarity: "Epic",
     priceCoins: 360,
@@ -71,8 +71,8 @@ export const avatarOptions: AvatarOption[] = [
   },
   {
     id: "ace",
-    title: "Ace",
-    description: "Season reward voor vaste spelers.",
+    title: "Aas",
+    description: "Seizoensbeloning voor vaste spelers.",
     rarity: "Premium",
     premium: true,
     badge: "A",
@@ -84,7 +84,7 @@ export const avatarOptions: AvatarOption[] = [
 export const avatarFrameOptions: AvatarFrameOption[] = [
   {
     id: "plain",
-    title: "Classic",
+    title: "Klassiek",
     description: "Rustige standaard rand.",
     rarity: "Starter",
     borderColor: "#17352a",
@@ -113,8 +113,8 @@ export const avatarFrameOptions: AvatarFrameOption[] = [
   },
   {
     id: "gold",
-    title: "Gold Frame",
-    description: "Unlock op level 10 of via premium rewards.",
+    title: "Gouden frame",
+    description: "Ontgrendel op niveau 10 of via premium beloningen.",
     rarity: "Epic",
     unlockLevel: 10,
     borderColor: "#facc15",

@@ -71,8 +71,9 @@ export type GameRoom = {
   redrawOffer?: {
     playerId: string;
     cardId: string;
-    attempts: number;
+    offerId: string;
   };
+  redrawCounts: Record<string, number>;
 
   winnerId?: string;
   loserId?: string;
@@ -133,6 +134,7 @@ export type PublicRoomState = {
   sevenStopAfterNext?: boolean;
   canRedrawDrawnCard: boolean;
   redrawCostGems: number;
+  redrawOfferId?: string;
 
   canDraw: boolean;
   canPass: boolean;

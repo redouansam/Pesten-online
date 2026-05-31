@@ -24,13 +24,25 @@ type PendingAction =
   | "rematch"
   | null;
 
+type RedrawRequestPayload = {
+  requestId: string;
+  offerId: string;
+  availableGems: number;
+};
+
+type RedrawSuccess = {
+  requestId?: string;
+  costGems: number;
+  offerId?: string;
+};
+
 export type ConnectionState =
   | "connecting"
   | "online"
   | "offline"
   | "reconnecting";
 
-export function useRoomSocket(hapticsEnabled = true) {
+export function useRoomSocket(hapticsEnabled = true, enabled = true) {
   const [connected, setConnected] = useState(false);
   const [connectionState, setConnectionState] =
     useState<ConnectionState>("connecting");
@@ -43,9 +55,11 @@ export function useRoomSocket(hapticsEnabled = true) {
   const [matchmakingStatus, setMatchmakingStatus] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingAction>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [redrawSuccess, setRedrawSuccess] = useState<RedrawSuccess | null>(null);
   const hapticsEnabledRef = useRef(hapticsEnabled);
   const nameRef = useRef(name);
   const playerIdRef = useRef(playerId);
+  const pendingActionRef = useRef<PendingAction>(pendingAction);
 
   useEffect(() => {
     hapticsEnabledRef.current = hapticsEnabled;
@@ -60,6 +74,17 @@ export function useRoomSocket(hapticsEnabled = true) {
   }, [playerId]);
 
   useEffect(() => {
+    pendingActionRef.current = pendingAction;
+  }, [pendingAction]);
+
+  useEffect(() => {
+    if (!enabled) {
+      setConnected(false);
+      setConnectionState("offline");
+      setPendingAction(null);
+      return;
+    }
+
     async function loadProfileName() {
       const savedName = await AsyncStorage.getItem(STORAGE_PLAYER_NAME);
 
@@ -113,7 +138,7 @@ export function useRoomSocket(hapticsEnabled = true) {
 
     function onReconnectFailed() {
       setConnectionState("offline");
-      setErrorMessage("Opnieuw verbinden lukt niet. Check je netwerk.");
+      setErrorMessage("Opnieuw verbinden lukt niet. Controleer je netwerk.");
     }
 
     function onConnectError() {
@@ -157,7 +182,7 @@ export function useRoomSocket(hapticsEnabled = true) {
       playerIdRef.current = "";
       setPlayerId("");
       setConnectionState(socket.connected ? "online" : "offline");
-      setErrorMessage("Kamer niet meer beschikbaar. Maak of join opnieuw.");
+      setErrorMessage("Tafel niet meer beschikbaar. Maak een nieuwe tafel of doe opnieuw mee.");
     }
 
     function onRoomClosed(data?: { message?: string }) {
@@ -198,6 +223,12 @@ export function useRoomSocket(hapticsEnabled = true) {
       );
     }
 
+    function onRedrawSuccess(data: RedrawSuccess) {
+      setPendingAction(null);
+      setErrorMessage(null);
+      setRedrawSuccess(data);
+    }
+
     function onErrorMessage(message: string) {
       setPendingAction(null);
       setMatchmakingStatus(null);
@@ -220,6 +251,7 @@ export function useRoomSocket(hapticsEnabled = true) {
     socket.on("room_updated", onRoomUpdated);
     socket.on("public_rooms", onPublicRooms);
     socket.on("quick_play_result", onQuickPlayResult);
+    socket.on("redraw_success", onRedrawSuccess);
     socket.on("error_message", onErrorMessage);
     socket.on("connect_error", onConnectError);
     socket.io.on("reconnect_attempt", onReconnectAttempt);
@@ -277,6 +309,7 @@ export function useRoomSocket(hapticsEnabled = true) {
       socket.off("room_updated", onRoomUpdated);
       socket.off("public_rooms", onPublicRooms);
       socket.off("quick_play_result", onQuickPlayResult);
+      socket.off("redraw_success", onRedrawSuccess);
       socket.off("error_message", onErrorMessage);
       socket.off("connect_error", onConnectError);
       socket.io.off("reconnect_attempt", onReconnectAttempt);
@@ -294,7 +327,7 @@ export function useRoomSocket(hapticsEnabled = true) {
       appStateSubscription.remove();
       socket.disconnect();
     };
-  }, []);
+  }, [enabled]);
 
   function createRoom(visibility: "private" | "public" = "private") {
     if (!connected) {
@@ -427,11 +460,14 @@ export function useRoomSocket(hapticsEnabled = true) {
     socket.emit("pass_turn");
   }
 
-  function redrawDrawnCard() {
+  function redrawDrawnCard(payload: RedrawRequestPayload) {
+    if (pendingActionRef.current === "redraw") return;
+
+    pendingActionRef.current = "redraw";
     setPendingAction("redraw");
     setErrorMessage(null);
     if (hapticsEnabled) Haptics.selectionAsync().catch(() => {});
-    socket.emit("redraw_drawn_card");
+    socket.emit("redraw_drawn_card", payload);
   }
 
   function sortHand(mode: "suit" | "value") {
@@ -451,6 +487,10 @@ export function useRoomSocket(hapticsEnabled = true) {
 
   function clearError() {
     setErrorMessage(null);
+  }
+
+  function clearRedrawSuccess() {
+    setRedrawSuccess(null);
   }
 
   function retryConnection() {
@@ -488,6 +528,8 @@ export function useRoomSocket(hapticsEnabled = true) {
     matchmakingStatus,
     pendingAction,
     errorMessage,
+    redrawSuccess,
+    clearRedrawSuccess,
     clearError,
     retryConnection,
     createRoom,

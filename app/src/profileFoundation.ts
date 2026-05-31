@@ -1,7 +1,15 @@
 import type { Wallet } from "./economy";
+import type { LoginProvider, PlatformIdentity } from "./onboarding";
 
 export type PlayerProfileFoundation = {
   playerId: string;
+  guestId: string | null;
+  appleGameCenterId: string | null;
+  googlePlayGamesId: string | null;
+  platformUserId: string | null;
+  loginProvider: LoginProvider;
+  hasAcceptedTerms: boolean;
+  hasCompletedTutorial: boolean;
   playerName: string;
   wins: number;
   losses: number;
@@ -36,8 +44,10 @@ export function buildProfileFoundation({
   name,
   playerId,
   wallet,
+  identity,
 }: {
   connected: boolean;
+  identity?: PlatformIdentity | null;
   level: number;
   name: string;
   playerId: string;
@@ -45,6 +55,15 @@ export function buildProfileFoundation({
 }): PlayerProfileFoundation {
   return {
     playerId,
+    guestId: identity?.guestId ?? null,
+    appleGameCenterId: identity?.appleGameCenterId ?? null,
+    googlePlayGamesId: identity?.googlePlayGamesId ?? null,
+    platformUserId: identity?.platformUserId ?? null,
+    loginProvider: identity?.loginProvider ?? "guest",
+    hasAcceptedTerms: Boolean(
+      identity?.hasAcceptedTerms && identity?.hasAcceptedPrivacy
+    ),
+    hasCompletedTutorial: Boolean(identity?.hasCompletedTutorial),
     playerName: name,
     wins: wallet.wins,
     losses: wallet.losses,

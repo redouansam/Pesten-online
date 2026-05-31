@@ -145,7 +145,7 @@ function migrateHost(room: GameRoom) {
   if (nextHumanHost) {
     if (room.hostId !== nextHumanHost.id) {
       room.hostId = nextHumanHost.id;
-      room.lastMessage = `${nextHumanHost.name} is nu host.`;
+      room.lastMessage = `${nextHumanHost.name} is nu de host.`;
     }
 
     return true;
@@ -217,7 +217,7 @@ function closeRoom(
   }
 
   rooms.delete(roomCode);
-  console.log(`Kamer ${roomCode} gesloten (${reason})`);
+  console.log(`Tafel ${roomCode} gesloten (${reason})`);
 
   return true;
 }
@@ -427,7 +427,7 @@ function scheduleRoomCleanup(roomCode: string) {
     }
 
     if (!hasConnectedHumans && getHumans(room).every((player) => !player.connected)) {
-      console.log(`Kamer ${roomCode} wacht nog op reconnect van menselijke spelers`);
+      console.log(`Tafel ${roomCode} wacht nog op opnieuw verbinden van menselijke spelers`);
     }
   }, 10 * 60 * 1000);
 
@@ -511,7 +511,7 @@ function removePlayerFromRoom(roomCode: string, playerId: string) {
     leavingWasCurrentPlayer &&
     clearForcedTurnState(
       room,
-      `${leavingPlayer?.name ?? "Een speler"} heeft de kamer verlaten; de beurt gaat door.`
+      `${leavingPlayer?.name ?? "Een speler"} heeft de tafel verlaten; de beurt gaat door.`
     );
 
   const messageBeforeValidation = room.lastMessage;
@@ -521,7 +521,7 @@ function removePlayerFromRoom(roomCode: string, playerId: string) {
   if (!rooms.has(roomCode)) return;
 
   if (!clearedForcedTurn && room.lastMessage === messageBeforeValidation) {
-    room.lastMessage = `${leavingPlayer?.name ?? "Een speler"} heeft de kamer verlaten.`;
+    room.lastMessage = `${leavingPlayer?.name ?? "Een speler"} heeft de tafel verlaten.`;
   }
 
   sendRoomUpdate(roomCode);
@@ -608,7 +608,7 @@ function recoverExistingPlayer(socket: Socket, payload: SessionPayload) {
   );
 
   console.log(
-    `${found.player.name} herstelde sessie in kamer ${found.room.code}`
+    `${found.player.name} herstelde sessie in tafel ${found.room.code}`
   );
 
   return true;
@@ -656,7 +656,7 @@ io.on("connection", (socket) => {
 
     rooms.set(code, room);
 
-    console.log(`${playerName} maakte kamer ${code}`);
+    console.log(`${playerName} maakte tafel ${code}`);
     attachPlayerSocket(socket, code, room, player, "room_created");
   });
 
@@ -665,19 +665,19 @@ io.on("connection", (socket) => {
     const playerName = sanitizePlayerName(name);
 
     if (!roomCode) {
-      socket.emit("error_message", "Kamer bestaat niet");
+      socket.emit("error_message", "Tafel bestaat niet");
       return;
     }
 
     if (!validateRoomInvariant(roomCode)) {
-      socket.emit("error_message", "Kamer bestaat niet");
+      socket.emit("error_message", "Tafel bestaat niet");
       return;
     }
 
     const room = rooms.get(roomCode);
 
     if (!room) {
-      socket.emit("error_message", "Kamer bestaat niet");
+      socket.emit("error_message", "Tafel bestaat niet");
       return;
     }
 
@@ -694,7 +694,7 @@ io.on("connection", (socket) => {
         "room_joined",
         playerName
       );
-      console.log(`${reconnectingPlayer.name} herstelde join in kamer ${roomCode}`);
+      console.log(`${reconnectingPlayer.name} herstelde deelname aan tafel ${roomCode}`);
       return;
     }
 
@@ -718,7 +718,7 @@ io.on("connection", (socket) => {
     }
 
     if (room.players.length >= room.maxPlayers) {
-      socket.emit("error_message", "Deze kamer zit vol");
+      socket.emit("error_message", "Deze tafel zit vol");
       return;
     }
 
@@ -726,7 +726,7 @@ io.on("connection", (socket) => {
 
     room.players.push(player);
 
-    console.log(`${playerName} joined kamer ${roomCode}`);
+    console.log(`${playerName} schoof aan bij tafel ${roomCode}`);
 
     if (room.started && room.turnState !== "finished") {
       room.lastMessage = `${playerName} kijkt mee en doet de volgende ronde mee.`;
@@ -835,14 +835,14 @@ io.on("connection", (socket) => {
       maxPlayers: 4,
     });
 
-    room.lastMessage = "Open snelspel-tafel gemaakt.";
+    room.lastMessage = "Open snelspeltafel gemaakt.";
     rooms.set(code, room);
 
     socket.emit("quick_play_result", {
       status: "created",
       code,
     });
-    console.log(`${playerName} maakte snelspel kamer ${code}`);
+    console.log(`${playerName} maakte snelspeltafel ${code}`);
     attachPlayerSocket(socket, code, room, player, "room_created");
     emitPublicRooms(socket);
   });
@@ -918,7 +918,7 @@ io.on("connection", (socket) => {
       }
 
       attachPlayerSocket(socket, roomCode, room, player, "reconnected", name);
-      console.log(`${player.name} reconnect in kamer ${roomCode}`);
+      console.log(`${player.name} opnieuw verbonden in tafel ${roomCode}`);
     }
   );
 
@@ -975,7 +975,7 @@ io.on("connection", (socket) => {
 
     try {
       startGame(room);
-      console.log(`Game gestart in kamer ${roomCode}`);
+      console.log(`Spel gestart in tafel ${roomCode}`);
       sendRoomUpdate(roomCode);
     } catch (error) {
       socket.emit(
@@ -1027,7 +1027,7 @@ io.on("connection", (socket) => {
     } catch (error) {
       socket.emit(
         "error_message",
-        error instanceof Error ? error.message : "Pakken mislukt"
+        error instanceof Error ? error.message : "Kaarten trekken mislukt"
       );
     }
   });
@@ -1053,26 +1053,41 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("redraw_drawn_card", () => {
-    const roomCode = socketToRoom.get(socket.id);
-    const playerId = socketToPlayerId.get(socket.id);
+  socket.on(
+    "redraw_drawn_card",
+    (payload?: {
+      requestId?: string;
+      offerId?: string;
+      availableGems?: number;
+    }) => {
+      const roomCode = socketToRoom.get(socket.id);
+      const playerId = socketToPlayerId.get(socket.id);
 
-    if (!roomCode || !playerId) return;
+      if (!roomCode || !playerId) return;
 
-    const room = rooms.get(roomCode);
+      const room = rooms.get(roomCode);
 
-    if (!room) return;
+      if (!room) return;
 
-    try {
-      redrawDrawnCard(room, playerId);
-      sendRoomUpdate(roomCode);
-    } catch (error) {
-      socket.emit(
-        "error_message",
-        error instanceof Error ? error.message : "Nieuwe pakkaart mislukt"
-      );
+      try {
+        const result = redrawDrawnCard(room, playerId, {
+          offerId: payload?.offerId,
+          availableGems: payload?.availableGems,
+        });
+        socket.emit("redraw_success", {
+          requestId: payload?.requestId,
+          costGems: result.costGems,
+          offerId: payload?.offerId,
+        });
+        sendRoomUpdate(roomCode);
+      } catch (error) {
+        socket.emit(
+          "error_message",
+          error instanceof Error ? error.message : "Opnieuw trekken mislukt"
+        );
+      }
     }
-  });
+  );
 
   socket.on("reorder_hand", ({ cardIds }: { cardIds: string[] }) => {
     const roomCode = socketToRoom.get(socket.id);

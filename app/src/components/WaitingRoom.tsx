@@ -68,7 +68,7 @@ export function WaitingRoom({
   async function shareCode() {
     if (hapticsEnabled) Haptics.selectionAsync().catch(() => {});
     await Share.share({
-      message: `Doe mee met mijn Pesten-kamer met code: ${room.code}`,
+      message: `Doe mee met mijn Pesten-tafel met code: ${room.code}`,
     });
   }
 
@@ -128,7 +128,7 @@ export function WaitingRoom({
                   : "Offline"}
               </Text>
               <Text style={styles.connectionHelpText}>
-                Room blijft bewaard. Op gratis hosting kan wakker worden 30-60 sec duren.
+                Tafel blijft bewaard. Op gratis hosting kan verbinden even duren.
               </Text>
             </View>
             <Pressable
@@ -152,7 +152,7 @@ export function WaitingRoom({
               {pendingAction === "bot"
                 ? "Bot toevoegen..."
                 : startPending
-                ? "Game starten..."
+                ? "Spel starten..."
                 : "Even verwerken..."}
             </Text>
           </View>

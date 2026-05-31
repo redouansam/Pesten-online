@@ -11,14 +11,14 @@ export function getTurnText(room: PublicRoomState) {
 
   if (room.turnState === "must_play") {
     return room.canDraw
-      ? "Heer: pak 1 kaart"
+      ? "Heer: trek 1 kaart"
       : "Heer: speel nog precies 1 kaart";
   }
 
   if (room.turnState === "seven_chain") {
     if (room.sevenStopAfterNext) {
       return room.canDraw
-        ? "Heer in 7: pak 1 kaart"
+        ? "Heer in 7: trek 1 kaart"
         : "Heer: speel nog precies 1 kaart";
     }
 

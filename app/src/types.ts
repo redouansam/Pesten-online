@@ -83,6 +83,7 @@ export type PublicRoomState = {
   sevenStopAfterNext?: boolean;
   canRedrawDrawnCard: boolean;
   redrawCostGems: number;
+  redrawOfferId?: string;
 
   canDraw: boolean;
   canPass: boolean;

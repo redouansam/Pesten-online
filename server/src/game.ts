@@ -19,7 +19,13 @@ const values: Card["value"][] = [
 ];
 
 const pestCards: Card["value"][] = ["A", "2", "7", "8", "J", "K", "JOKER"];
-const redrawCostGems = 5;
+const redrawBaseCostGems = 3;
+const redrawCostStepGems = 2;
+
+export type RedrawRequestOptions = {
+  offerId?: string;
+  availableGems?: number;
+};
 
 export function generateRoomCode(existingCodes: string[]) {
   let code = "";
@@ -61,6 +67,7 @@ export function createRoom(
 
     pendingDraw: 0,
     turnState: "normal",
+    redrawCounts: {},
 
     roundPlayerIds: [],
     finishedPlayerIds: [],
@@ -140,6 +147,7 @@ export function startGame(room: GameRoom) {
   room.sevenSuit = undefined;
   room.sevenStopAfterNext = false;
   room.redrawOffer = undefined;
+  room.redrawCounts = {};
 
   room.winnerId = undefined;
   room.loserId = undefined;
@@ -184,6 +192,7 @@ export function resetToLobby(room: GameRoom) {
   room.sevenSuit = undefined;
   room.sevenStopAfterNext = false;
   room.redrawOffer = undefined;
+  room.redrawCounts = {};
   room.winnerId = undefined;
   room.loserId = undefined;
   room.roundPlayerIds = [];
@@ -430,6 +439,92 @@ function canPassNow(room: GameRoom) {
   return false;
 }
 
+export function getRedrawCost(room: GameRoom, playerId: string) {
+  return (
+    redrawBaseCostGems +
+    (room.redrawCounts?.[playerId] ?? 0) * redrawCostStepGems
+  );
+}
+
+function createRedrawOffer(room: GameRoom, playerId: string, cardId: string) {
+  const redrawCount = room.redrawCounts?.[playerId] ?? 0;
+
+  room.redrawOffer = {
+    playerId,
+    cardId,
+    offerId: `${room.roundId}:${playerId}:${cardId}:${redrawCount}`,
+  };
+
+  return room.redrawOffer;
+}
+
+export function spendGemsForRedraw(
+  room: GameRoom,
+  playerId: string,
+  availableGems?: number
+) {
+  const costGems = getRedrawCost(room, playerId);
+
+  if (availableGems !== undefined && availableGems < costGems) {
+    throw new Error("Niet genoeg gems");
+  }
+
+  return costGems;
+}
+
+function assertCanRedrawLastDrawnCard(
+  room: GameRoom,
+  playerId: string,
+  options: RedrawRequestOptions = {}
+) {
+  if (!room.started) {
+    throw new Error("Spel is nog niet gestart");
+  }
+
+  if (room.turnState === "finished") {
+    throw new Error("Spel is al klaar");
+  }
+
+  const currentPlayer = getCurrentPlayer(room);
+
+  if (!currentPlayer || currentPlayer.id !== playerId) {
+    throw new Error("Je bent niet aan de beurt");
+  }
+
+  if (currentPlayer.isBot) {
+    throw new Error("Bots gebruiken geen gems");
+  }
+
+  if (room.turnState !== "after_draw") {
+    throw new Error("Alleen direct na trekken.");
+  }
+
+  if (room.redrawOffer?.playerId !== playerId) {
+    throw new Error("Alleen direct na trekken.");
+  }
+
+  if (options.offerId && options.offerId !== room.redrawOffer.offerId) {
+    throw new Error("Alleen direct na trekken.");
+  }
+
+  spendGemsForRedraw(room, playerId, options.availableGems);
+
+  return room.redrawOffer;
+}
+
+export function canRedrawLastDrawnCard(
+  room: GameRoom,
+  playerId: string,
+  options: RedrawRequestOptions = {}
+) {
+  try {
+    assertCanRedrawLastDrawnCard(room, playerId, options);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function finishRoundIfHandEmpty(room: GameRoom, playerId: string) {
   if ((room.hands[playerId]?.length ?? 0) > 0) return false;
 
@@ -500,11 +595,11 @@ export function playCard(
   chosenSuit?: Suit
 ) {
   if (!room.started) {
-    throw new Error("Game is nog niet gestart");
+    throw new Error("Spel is nog niet gestart");
   }
 
   if (room.turnState === "finished") {
-    throw new Error("Game is al klaar");
+    throw new Error("Spel is al klaar");
   }
 
   const currentPlayer = getCurrentPlayer(room);
@@ -516,7 +611,7 @@ export function playCard(
   const hand = room.hands[playerId];
 
   if (!hand) {
-    throw new Error("Hand niet gevonden");
+    throw new Error("Handkaarten niet gevonden");
   }
 
   const cardIndex = hand.findIndex((card) => card.id === cardId);
@@ -532,7 +627,7 @@ export function playCard(
   }
 
   if (card.value === "J" && !chosenSuit) {
-    throw new Error("Kies een symbool bij de boer");
+    throw new Error("Kies een symbool bij de Boer.");
   }
 
   const wasSevenChain = room.turnState === "seven_chain";
@@ -705,7 +800,7 @@ function resolveSevenChainAfterCard(
     room.sevenStopAfterNext = true;
     room.lastMessage = hasPlayableCard(room, playerId)
       ? "Heer in 7-reeks: leg nog precies een kaart."
-      : "Heer in 7-reeks: geen vervolgkaart, pak 1 kaart.";
+      : "Heer in 7-reeks: geen vervolgkaart, trek 1 kaart.";
     return;
   }
 
@@ -779,7 +874,7 @@ function resolveMustPlayAfterKing(room: GameRoom, playerId: string) {
     room.lastMessage = `${getPlayerName(
       room,
       playerId
-    )} legde een Heer maar heeft geen vervolgkaart. Pak 1 kaart.`;
+    )} legde een Heer maar heeft geen vervolgkaart. Trek 1 kaart.`;
 
     room.turnState = "must_play";
     return;
@@ -790,11 +885,11 @@ function resolveMustPlayAfterKing(room: GameRoom, playerId: string) {
 
 export function drawCards(room: GameRoom, playerId: string) {
   if (!room.started) {
-    throw new Error("Game is nog niet gestart");
+    throw new Error("Spel is nog niet gestart");
   }
 
   if (room.turnState === "finished") {
-    throw new Error("Game is al klaar");
+    throw new Error("Spel is al klaar");
   }
 
   const currentPlayer = getCurrentPlayer(room);
@@ -804,7 +899,7 @@ export function drawCards(room: GameRoom, playerId: string) {
   }
 
   if (room.turnState === "after_draw") {
-    throw new Error("Je hebt al gepakt. Je mag nu leggen of passen.");
+    throw new Error("Je hebt al een kaart getrokken. Je mag nu leggen of passen.");
   }
 
   if (!canDrawNow(room, playerId)) {
@@ -820,6 +915,23 @@ export function drawCards(room: GameRoom, playerId: string) {
   room.sevenStopAfterNext = false;
   room.redrawOffer = undefined;
 
+  if (amount === 1 && drawnCards.length === 1) {
+    room.turnState = "after_draw";
+    createRedrawOffer(room, playerId, drawnCards[0].id);
+
+    room.lastMessage = hasPlayableCard(room, playerId)
+      ? `${getPlayerName(
+          room,
+          playerId
+        )} trok 1 kaart en mag nu leggen, opnieuw trekken of passen.`
+      : `${getPlayerName(
+          room,
+          playerId
+        )} trok 1 kaart maar kan geen kaart leggen. Opnieuw trekken mogelijk.`;
+
+    return;
+  }
+
   if (hasPlayableCard(room, playerId)) {
     room.turnState = "after_draw";
 
@@ -833,22 +945,6 @@ export function drawCards(room: GameRoom, playerId: string) {
             room,
             playerId
           )} pakte 1 kaart en mag nu leggen of passen.`;
-
-    return;
-  }
-
-  if (amount === 1 && drawnCards.length === 1) {
-    room.turnState = "after_draw";
-    room.redrawOffer = {
-      playerId,
-      cardId: drawnCards[0].id,
-      attempts: 0,
-    };
-
-    room.lastMessage = `${getPlayerName(
-      room,
-      playerId
-    )} pakte 1 kaart maar kan geen kaart leggen. Nieuwe pakkaart mogelijk.`;
 
     return;
   }
@@ -871,11 +967,11 @@ export function drawCards(room: GameRoom, playerId: string) {
 
 export function passTurn(room: GameRoom, playerId: string) {
   if (!room.started) {
-    throw new Error("Game is nog niet gestart");
+    throw new Error("Spel is nog niet gestart");
   }
 
   if (room.turnState === "finished") {
-    throw new Error("Game is al klaar");
+    throw new Error("Spel is al klaar");
   }
 
   const currentPlayer = getCurrentPlayer(room);
@@ -885,53 +981,35 @@ export function passTurn(room: GameRoom, playerId: string) {
   }
 
   if (!canPassNow(room)) {
-    throw new Error("Je mag alleen passen nadat je hebt gepakt.");
+    throw new Error("Je mag alleen passen nadat je een kaart hebt getrokken.");
   }
 
   room.turnState = "normal";
   room.sevenSuit = undefined;
   room.sevenStopAfterNext = false;
   room.redrawOffer = undefined;
-  room.lastMessage = `${getPlayerName(room, playerId)} past de beurt.`;
+  room.lastMessage = `${getPlayerName(room, playerId)} past.`;
 
   moveToNextPlayer(room);
 }
 
-export function redrawDrawnCard(room: GameRoom, playerId: string) {
-  if (!room.started) {
-    throw new Error("Game is nog niet gestart");
-  }
-
-  if (room.turnState === "finished") {
-    throw new Error("Game is al klaar");
-  }
-
-  const currentPlayer = getCurrentPlayer(room);
-
-  if (!currentPlayer || currentPlayer.id !== playerId) {
-    throw new Error("Je bent niet aan de beurt");
-  }
-
-  if (room.turnState !== "after_draw") {
-    throw new Error("Je kunt nu geen nieuwe pakkaart proberen");
-  }
-
-  if (room.redrawOffer?.playerId !== playerId) {
-    throw new Error("Er is geen pakkaart om te vervangen");
-  }
-
+export function applyRedrawLastDrawnCard(
+  room: GameRoom,
+  playerId: string,
+  options: RedrawRequestOptions = {}
+) {
+  const offer = assertCanRedrawLastDrawnCard(room, playerId, options);
+  const costGems = getRedrawCost(room, playerId);
   const hand = room.hands[playerId];
 
   if (!hand) {
-    throw new Error("Hand niet gevonden");
+    throw new Error("Handkaarten niet gevonden");
   }
 
-  const oldCardIndex = hand.findIndex(
-    (card) => card.id === room.redrawOffer?.cardId
-  );
+  const oldCardIndex = hand.findIndex((card) => card.id === offer.cardId);
 
   if (oldCardIndex === -1) {
-    throw new Error("De pakkaart is niet meer beschikbaar");
+    throw new Error("Alleen direct na trekken.");
   }
 
   const [oldCard] = hand.splice(oldCardIndex, 1);
@@ -942,33 +1020,40 @@ export function redrawDrawnCard(room: GameRoom, playerId: string) {
 
   if (!newCard) {
     hand.splice(oldCardIndex, 0, oldCard);
-    throw new Error("Er zijn geen kaarten meer om te pakken");
+    throw new Error("Er zijn geen kaarten meer om te trekken");
   }
 
   room.deck.push(oldCard);
   hand.push(newCard);
+  room.redrawCounts[playerId] = (room.redrawCounts[playerId] ?? 0) + 1;
+  const nextOffer = createRedrawOffer(room, playerId, newCard.id);
+  room.turnState = "after_draw";
   room.lastMessage = `${getPlayerName(
     room,
     playerId
-  )} verving de pakkaart met gems.`;
+  )} trok opnieuw voor ${costGems} gems.`;
 
-  if (hasPlayableCard(room, playerId)) {
-    room.redrawOffer = undefined;
-    return;
-  }
-
-  room.redrawOffer = {
-    playerId,
-    cardId: newCard.id,
-    attempts: room.redrawOffer.attempts + 1,
+  return {
+    costGems,
+    oldCard,
+    newCard,
+    offerId: nextOffer.offerId,
   };
+}
+
+export function redrawDrawnCard(
+  room: GameRoom,
+  playerId: string,
+  options: RedrawRequestOptions = {}
+) {
+  return applyRedrawLastDrawnCard(room, playerId, options);
 }
 
 export function reorderHand(room: GameRoom, playerId: string, cardIds: string[]) {
   const hand = room.hands[playerId];
 
   if (!hand) {
-    throw new Error("Hand niet gevonden");
+    throw new Error("Handkaarten niet gevonden");
   }
 
   if (cardIds.length !== hand.length) {
@@ -999,7 +1084,7 @@ export function sortHand(
   const hand = room.hands[playerId];
 
   if (!hand) {
-    throw new Error("Hand niet gevonden");
+    throw new Error("Handkaarten niet gevonden");
   }
 
   const suitOrder: Record<string, number> = {
@@ -1132,7 +1217,7 @@ function drawAmountToPlayer(room: GameRoom, playerId: string, amount: number) {
   const drawnCards: Card[] = [];
 
   if (!hand) {
-    throw new Error("Hand niet gevonden");
+    throw new Error("Handkaarten niet gevonden");
   }
 
   for (let index = 0; index < amount; index++) {
@@ -1264,7 +1349,9 @@ export function getPublicRoomState(room: GameRoom, playerId: string) {
       !roundFinished &&
       room.turnState === "after_draw" &&
       room.redrawOffer?.playerId === playerId,
-    redrawCostGems,
+    redrawCostGems: getRedrawCost(room, playerId),
+    redrawOfferId:
+      room.redrawOffer?.playerId === playerId ? room.redrawOffer.offerId : undefined,
 
     canDraw:
       isCurrentPlayer &&

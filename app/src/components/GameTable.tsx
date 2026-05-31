@@ -113,7 +113,6 @@ export function GameTable({
   const finishHapticRoundRef = useRef<number | null>(null);
   const previousHandCountRef = useRef(room.hand.length);
   const previousTopCardIdRef = useRef(room.topCard?.id);
-  const autoPassNoGemsRef = useRef(false);
   const roundFinished = room.turnState === "finished";
 
   useEffect(() => {
@@ -284,36 +283,6 @@ export function GameTable({
     return () => clearTimeout(timer);
   }, [cardHint]);
 
-  useEffect(() => {
-    if (
-      !isYourTurn ||
-      !room.canRedrawDrawnCard ||
-      roundFinished ||
-      gems >= room.redrawCostGems
-    ) {
-      autoPassNoGemsRef.current = false;
-      return;
-    }
-
-    if (autoPassNoGemsRef.current) return;
-
-    autoPassNoGemsRef.current = true;
-    showCardHint("Geen speelbare pakkaart en te weinig gems. Beurt gaat door.");
-
-    const timer = setTimeout(() => {
-      passTurn();
-    }, 650);
-
-    return () => clearTimeout(timer);
-  }, [
-    gems,
-    isYourTurn,
-    passTurn,
-    room.canRedrawDrawnCard,
-    room.redrawCostGems,
-    roundFinished,
-  ]);
-
   const me = room.players.find((player) => player.id === playerId);
   const others = room.players.filter((player) => player.id !== playerId);
   const isWaitingForNextRound = Boolean(me?.waitingForNextRound);
@@ -341,6 +310,8 @@ export function GameTable({
   const endRanking = useMemo(() => getEndRanking(room), [room]);
   const compactControls = screenWidth < 390 || screenHeight < 720;
   const rematchPending = pendingAction === "rematch";
+  const redrawBusy = pendingAction === "redraw";
+  const canAffordRedraw = gems >= room.redrawCostGems;
 
   const handLayout = useMemo(() => {
     const maxGameWidth = Math.min(screenWidth, 560);
@@ -534,11 +505,10 @@ export function GameTable({
   }
 
   function handleRedrawDrawnCard() {
-    if (!room.canRedrawDrawnCard) return;
+    if (!room.canRedrawDrawnCard || redrawBusy) return;
 
-    if (gems < room.redrawCostGems) {
-      showCardHint("Niet genoeg gems. Je beurt wordt gepast.");
-      passTurn();
+    if (!canAffordRedraw) {
+      showCardHint(`Niet genoeg gems. Je hebt ${room.redrawCostGems} gems nodig.`);
       return;
     }
 
@@ -588,7 +558,7 @@ export function GameTable({
             compactControls && styles.gameInfoPillCompact,
           ]}
         >
-          <Text style={styles.gameInfoLabel}>Kamer</Text>
+          <Text style={styles.gameInfoLabel}>Kamercode</Text>
           <Text style={styles.gameInfoValue}>{room.code}</Text>
         </View>
 
@@ -621,7 +591,7 @@ export function GameTable({
           ]}
           onPress={leaveRoom}
         >
-          <Text style={styles.exitMiniText}>Exit</Text>
+          <Text style={styles.exitMiniText}>Verlaat</Text>
         </Pressable>
       </View>
 
@@ -633,10 +603,10 @@ export function GameTable({
           <Text style={styles.gameConnectionText} numberOfLines={1}>
             {errorMessage ??
               (connectionState === "reconnecting"
-                ? "Server wordt wakker of verbinding herstelt..."
+                ? "Verbinding herstellen..."
                 : connectionState === "connecting"
-                ? "Verbinden... dit kan 30-60 sec duren"
-                : "Offline - tik om opnieuw te verbinden")}
+                ? "Verbinden..."
+                : "Offline. Tik om opnieuw te verbinden.")}
           </Text>
         </Pressable>
       ) : null}
@@ -738,7 +708,7 @@ export function GameTable({
                         <Text style={styles.deckLabel}>
                           {room.pendingDraw > 0
                             ? `Pak ${room.pendingDraw}`
-                            : "Pak"}
+                            : "Trek kaart"}
                         </Text>
                       </Pressable>
                     </Animated.View>
@@ -793,7 +763,7 @@ export function GameTable({
                         />
                       ) : null}
                     </Animated.View>
-                    <Text style={styles.pileCaption}>Op tafel</Text>
+                    <Text style={styles.pileCaption}>Aflegstapel</Text>
                   </View>
                 </View>
               </View>
@@ -894,13 +864,18 @@ export function GameTable({
                 style={[
                   styles.redrawButton,
                   compactControls && styles.redrawButtonCompact,
-                  gems < room.redrawCostGems && styles.disabledButton,
+                  (!canAffordRedraw || redrawBusy) && styles.disabledButton,
                 ]}
                 onPress={handleRedrawDrawnCard}
+                disabled={redrawBusy}
               >
-                <Text style={styles.redrawButtonText}>Nieuw</Text>
-                <Text style={styles.redrawButtonSub}>
-                  {room.redrawCostGems} gems
+                <Text style={styles.redrawButtonText} numberOfLines={1}>
+                  {redrawBusy ? "Trekken..." : "Opnieuw trekken"}
+                </Text>
+                <Text style={styles.redrawButtonSub} numberOfLines={1}>
+                  {canAffordRedraw
+                    ? `Nieuwe kaart voor ${room.redrawCostGems} gems`
+                    : "Niet genoeg gems"}
                 </Text>
               </Pressable>
             ) : null}
@@ -933,7 +908,7 @@ export function GameTable({
               disabled={!room.canDraw}
             >
               <Text style={styles.actionButtonText}>
-                {room.pendingDraw > 0 ? `Pak ${room.pendingDraw}` : "Pak"}
+                {room.pendingDraw > 0 ? `Pak ${room.pendingDraw}` : "Trek kaart"}
               </Text>
             </Pressable>
 
@@ -958,7 +933,7 @@ export function GameTable({
             compactControls && styles.handToolbarCompact,
           ]}
         >
-          <Text style={styles.handTitle}>Hand</Text>
+          <Text style={styles.handTitle}>Handkaarten</Text>
 
           <View style={styles.handToolbarRight}>
             <View style={styles.handSortSegment}>
@@ -975,7 +950,7 @@ export function GameTable({
                     handSortMode === "suit" && styles.handSortButtonTextActive,
                   ]}
                 >
-                  Kleur
+                  Symbool
                 </Text>
               </Pressable>
               <Pressable
@@ -1148,7 +1123,7 @@ export function GameTable({
           <GameModalFrame
             eyebrow="Boer gespeeld"
             title="Kies symbool"
-            text="Dit wordt de nieuwe kleur op tafel."
+            text="Dit wordt het nieuwe symbool op tafel."
           >
 
             <View style={styles.modalSuitGrid}>
@@ -1251,8 +1226,7 @@ export function GameTable({
             <View style={styles.rematchPanel}>
               <Text style={styles.rematchTitle}>Volgende stap</Text>
               <Text style={styles.finishMissionText}>
-                Nog een potje zet de tafel terug naar de lobby. De host kan daarna
-                opnieuw starten.
+                Nog een potje zet de tafel terug naar de lobby. De host kan daarna opnieuw starten.
               </Text>
             </View>
 
@@ -1336,12 +1310,12 @@ function getRuleBadges(room: PublicRoomState): RuleBadge[] {
   } else if (room.turnState === "must_play") {
     badges.push({
       label: "Heer",
-      value: room.canDraw ? "pak 1" : "extra",
+      value: room.canDraw ? "trek 1" : "extra",
       tone: "warning",
     });
   } else if (room.turnState === "after_draw") {
     badges.push({
-      label: "Na pak",
+      label: "Na trekken",
       value: room.canPass ? "leg/pas" : "leg",
       tone: "success",
     });
@@ -1402,7 +1376,7 @@ function getRuleBanners(
     banners.push({
       label: "Heer",
       message: room.canDraw
-        ? "Geen passende extra kaart: pak 1 kaart."
+        ? "Geen passende extra kaart: trek 1 kaart."
         : "Speel nog precies 1 extra kaart.",
       tone: "warning",
     });
@@ -1560,21 +1534,21 @@ function getTurnCoachText({
 
   if (room.turnState === "after_draw") {
     if (room.canRedrawDrawnCard) {
-      return `Nieuwe kaart: ${room.redrawCostGems} gems of pas.`;
+      return `Nieuwe kaart voor ${room.redrawCostGems} gems. Speel of pas daarna.`;
     }
 
     return room.canPass
       ? "Speel of pas."
-      : "Leg je pakkaart.";
+      : "Leg je getrokken kaart.";
   }
 
   if (room.turnState === "seven_chain") {
     if (room.sevenStopAfterNext) {
       if (room.canDraw) {
-        return "Geen vervolgkaart: pak 1 kaart.";
+        return "Geen vervolgkaart: trek 1 kaart.";
       }
 
-      return "Heer in 7: leg nog een kaart.";
+      return "Heer in 7: speel nog precies 1 kaart.";
     }
 
     return room.sevenSuit
@@ -1584,7 +1558,7 @@ function getTurnCoachText({
 
   if (room.turnState === "must_play") {
     if (room.canDraw) {
-      return "Geen vervolgkaart: pak 1 kaart.";
+      return "Geen vervolgkaart: trek 1 kaart.";
     }
 
     return "Heer: speel nog precies 1 kaart.";
@@ -1595,11 +1569,11 @@ function getTurnCoachText({
   }
 
   if (playableCardsCount > 0) {
-    return "Tik of sleep speelbaar.";
+    return "Tik of sleep een speelbare kaart.";
   }
 
   if (room.canDraw) {
-    return "Pak een kaart.";
+    return "Trek een kaart.";
   }
 
   if (room.canPass) {
@@ -1611,12 +1585,12 @@ function getTurnCoachText({
 
 function getInvalidCardHint(room: PublicRoomState) {
   if (room.pendingDraw > 0) {
-    return `+${room.pendingDraw}: stapel met 2/Joker of pak.`;
+    return `+${room.pendingDraw}: stapel met 2/Joker of pak de straf.`;
   }
 
   if (room.turnState === "seven_chain") {
     if (room.sevenStopAfterNext) {
-      return "Heer in 7: leg exact 1 passende kaart.";
+      return "Heer in 7: speel precies 1 passende kaart.";
     }
 
     return room.sevenSuit
@@ -1625,7 +1599,7 @@ function getInvalidCardHint(room: PublicRoomState) {
   }
 
   if (room.turnState === "must_play") {
-    return "Heer: leg exact 1 passende extra kaart.";
+    return "Heer: speel precies 1 passende extra kaart.";
   }
 
   if (room.chosenSuit) {

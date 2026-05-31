@@ -276,7 +276,7 @@ export function useEconomy() {
     const currentDay = todayKey();
 
     if (walletRef.current.lastGemReward === currentDay) {
-      setNotice("Je daily gem chest is vandaag al geclaimd.");
+      setNotice("Je dagelijkse gem-beloning is vandaag al geclaimd.");
       return;
     }
 
@@ -288,15 +288,19 @@ export function useEconomy() {
 
     walletRef.current = nextWallet;
     setWallet(nextWallet);
-    setNotice(`Daily gem chest: +${DAILY_GEMS} gems.`);
+    setNotice(`Dagelijkse gem-beloning: +${DAILY_GEMS} gems.`);
   }
 
   function previewPremiumPass() {
-    setNotice("Premium pass loopt later via Apple/Google in-app purchases.");
+    setNotice("Premium pass komt later via App Store / Google Play.");
   }
 
   function previewGemPurchase() {
-    setNotice("Gems kopen loopt later via Apple/Google in-app purchases.");
+    setNotice("Gems kopen komt later via App Store / Google Play.");
+  }
+
+  function previewRewardedAd() {
+    setNotice("Advertenties komen later beschikbaar in de app-release.");
   }
 
   function selectCardBack(cardBackId: string) {
@@ -312,7 +316,7 @@ export function useEconomy() {
       setNotice(
         cardBack.premium
           ? "Deze kaartback hoort bij de premium pass."
-          : "Koop of unlock deze kaartback eerst."
+          : "Koop of ontgrendel deze kaartback eerst."
       );
       return;
     }
@@ -335,12 +339,12 @@ export function useEconomy() {
     }
 
     if (cardBack.premium) {
-      setNotice("Premium kaartbacks komen later met de premium pass.");
+      setNotice("Kaartbacks uit de premium pass komen later beschikbaar.");
       return;
     }
 
     if (cardBack.unlockLevel && season.level < cardBack.unlockLevel) {
-      setNotice(`Bereik level ${cardBack.unlockLevel} om dit te unlocken.`);
+      setNotice(`Bereik niveau ${cardBack.unlockLevel} om dit te ontgrendelen.`);
       return;
     }
 
@@ -398,7 +402,7 @@ export function useEconomy() {
     }
 
     if (tableSkin.premium) {
-      setNotice("Premium tafels komen later met de premium pass.");
+      setNotice("Tafels uit de premium pass komen later beschikbaar.");
       return;
     }
 
@@ -454,12 +458,12 @@ export function useEconomy() {
     }
 
     if (avatar.premium) {
-      setNotice("Premium avatars komen later met de premium pass.");
+      setNotice("Avatars uit de premium pass komen later beschikbaar.");
       return;
     }
 
     if (avatar.unlockLevel && season.level < avatar.unlockLevel) {
-      setNotice(`Bereik level ${avatar.unlockLevel} om dit te unlocken.`);
+      setNotice(`Bereik niveau ${avatar.unlockLevel} om dit te ontgrendelen.`);
       return;
     }
 
@@ -492,7 +496,7 @@ export function useEconomy() {
       setNotice(
         frame.premium
           ? "Dit frame hoort bij de premium pass."
-          : "Koop of unlock dit frame eerst."
+          : "Koop of ontgrendel dit frame eerst."
       );
       return;
     }
@@ -501,7 +505,7 @@ export function useEconomy() {
       ...currentWallet,
       selectedAvatarFrameId: frame.id,
     }));
-    setNotice(`${frame.title} is nu je avatar frame.`);
+    setNotice(`${frame.title} is nu je avatarframe.`);
   }
 
   function buyAvatarFrame(frameId: string) {
@@ -515,12 +519,12 @@ export function useEconomy() {
     }
 
     if (frame.premium) {
-      setNotice("Premium frames komen later met de premium pass.");
+      setNotice("Frames uit de premium pass komen later beschikbaar.");
       return;
     }
 
     if (frame.unlockLevel && season.level < frame.unlockLevel) {
-      setNotice(`Bereik level ${frame.unlockLevel} om dit frame te unlocken.`);
+      setNotice(`Bereik niveau ${frame.unlockLevel} om dit frame te ontgrendelen.`);
       return;
     }
 
@@ -636,17 +640,17 @@ export function useEconomy() {
     const currentSeason = getSeasonProgress(currentWallet.xp);
 
     if (currentSeason.level < reward.level) {
-      setNotice(`Bereik level ${reward.level} om dit te claimen.`);
+      setNotice(`Bereik niveau ${reward.level} om dit te claimen.`);
       return;
     }
 
     if (reward.premium && !currentWallet.premiumPass) {
-      setNotice("Deze reward hoort bij de premium pass.");
+      setNotice("Deze beloning hoort bij de premium pass.");
       return;
     }
 
     if (currentWallet.claimedSeasonRewards.includes(reward.id)) {
-      setNotice("Deze season reward is al geclaimd.");
+      setNotice("Deze seizoensbeloning is al geclaimd.");
       return;
     }
 
@@ -693,7 +697,7 @@ export function useEconomy() {
     const progress = getMilestoneProgress(currentWallet, reward);
 
     if (progress < reward.target) {
-      setNotice(`Nog ${reward.target - progress} stap te gaan voor ${reward.title}.`);
+      setNotice(`Nog ${reward.target - progress} voortgang nodig voor ${reward.title}.`);
       return;
     }
 
@@ -732,6 +736,7 @@ export function useEconomy() {
     claimDailyGems,
     previewPremiumPass,
     previewGemPurchase,
+    previewRewardedAd,
     buyCardBack,
     selectCardBack,
     buyTableSkin,

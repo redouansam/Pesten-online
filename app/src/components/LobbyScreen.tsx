@@ -52,10 +52,10 @@ import type { AvatarFrameOption, AvatarOption } from "../cosmetics";
 import { coinImage, gemImage } from "../currencyImages";
 import type { ConnectionState } from "../hooks/useRoomSocket";
 import {
+  hubPlayModes,
   matchmakingPreview,
-  platformFeatureCards,
   previewFriends,
-  type PlatformFeatureKey,
+  type HubPlayMode,
 } from "../platformFeatures";
 import type {
   AppSettings,
@@ -117,11 +117,11 @@ type RuleSection = {
 
 const shopTabs: Array<{ key: ShopTab; label: string }> = [
   { key: "wallet", label: "Munten" },
-  { key: "cardbacks", label: "Backs" },
+  { key: "cardbacks", label: "Kaartbacks" },
   { key: "tables", label: "Tafels" },
   { key: "avatars", label: "Avatars" },
   { key: "frames", label: "Frames" },
-  { key: "season", label: "Season" },
+  { key: "season", label: "Seizoen" },
 ];
 
 const pestenRuleSections: RuleSection[] = [
@@ -132,7 +132,7 @@ const pestenRuleSections: RuleSection[] = [
       {
         label: "Leg",
         title: "Geldige kaart",
-        text: "Een kaart mag alleen gelegd worden als kleur/symbool, waarde of het actieve gekozen symbool klopt.",
+        text: "Een kaart mag alleen gelegd worden als kleur, symbool, waarde of het actieve gekozen symbool klopt.",
       },
       {
         label: "Boer",
@@ -140,9 +140,9 @@ const pestenRuleSections: RuleSection[] = [
         text: "Na een Boer telt het gekozen symbool. Het symbool dat op de Boer staat is dan niet leidend.",
       },
       {
-        label: "Pak",
+        label: "Trekken",
         title: "Geen geldige kaart",
-        text: "Als je geen geldige kaart hebt, pak je volgens de bestaande gameflow en kun je daarna spelen of passen als dat mag.",
+        text: "Als je geen geldige kaart hebt, trek je een kaart volgens het spelverloop. Daarna kun je spelen of passen als dat mag.",
       },
       {
         label: "Stapel",
@@ -152,7 +152,7 @@ const pestenRuleSections: RuleSection[] = [
     ],
   },
   {
-    title: "Straf Stapelen",
+    title: "Straf stapelen",
     intro: "Pakstraffen blijven actief tot iemand de straf pakt.",
     rules: [
       {
@@ -171,14 +171,14 @@ const pestenRuleSections: RuleSection[] = [
         text: "Bij stapelen telt de straf op. Een 2 en Joker samen maken dus een hogere pakstraf.",
       },
       {
-        label: "Na pak",
+        label: "Na pakstraf",
         title: "Daarna verder",
         text: "Na het pakken van strafkaarten mag de speler daarna verder volgens de actieve regel en symboolsituatie.",
       },
     ],
   },
   {
-    title: "Speciale Kaarten",
+    title: "Speciale kaarten",
     intro: "Pestkaarten veranderen beurt, richting of wat je hierna moet doen.",
     rules: [
       {
@@ -193,7 +193,7 @@ const pestenRuleSections: RuleSection[] = [
       },
       {
         label: "8",
-        title: "Slaan",
+        title: "Beurt overslaan",
         text: "De volgende speler wordt overgeslagen.",
       },
       {
@@ -203,7 +203,7 @@ const pestenRuleSections: RuleSection[] = [
       },
       {
         label: "K",
-        title: "Heer extra kaart",
+        title: "Heer: extra kaart",
         text: "Na een Heer moet je precies 1 extra kaart leggen.",
       },
       {
@@ -214,7 +214,7 @@ const pestenRuleSections: RuleSection[] = [
       {
         label: "A",
         title: "Aas draait",
-        text: "De speelrichting draait om.",
+        text: "De speelrichting draait om. Bij 1-op-1 werkt Aas als overslaan.",
       },
     ],
   },
@@ -224,18 +224,18 @@ const pestenRuleSections: RuleSection[] = [
     rules: [
       {
         label: "Pest",
-        title: "Niet eindigen met pest",
+        title: "Niet eindigen met pestkaart",
         text: "Je mag niet eindigen met een pestkaart.",
       },
       {
         label: "A 2 7 8 J K",
         title: "Pestkaarten",
-        text: "Pestkaarten zijn minimaal Aas, 2, 7, 8, Boer/Jack, Heer/King en Joker.",
+        text: "Pestkaarten zijn minimaal Aas, 2, 7, 8, Boer, Heer en Joker.",
       },
       {
         label: "Uit",
         title: "Straf bij verkeerd uitgaan",
-        text: "Als je probeert te eindigen met een pestkaart, moet je strafkaarten pakken volgens onze game-regel.",
+        text: "Als je probeert te eindigen met een pestkaart, moet je strafkaarten pakken volgens onze spelregel.",
       },
     ],
   },
@@ -274,6 +274,7 @@ export function LobbyScreen({
   canClaimDailyGems,
   previewPremiumPass,
   previewGemPurchase,
+  previewRewardedAd,
   buyCardBack,
   selectCardBack,
   buyTableSkin,
@@ -285,6 +286,7 @@ export function LobbyScreen({
   claimDailyMission,
   claimSeasonReward,
   claimMilestoneReward,
+  openTutorial,
 }: {
   name: string;
   hasSavedName: boolean;
@@ -318,6 +320,7 @@ export function LobbyScreen({
   canClaimDailyGems: boolean;
   previewPremiumPass: () => void;
   previewGemPurchase: () => void;
+  previewRewardedAd: () => void;
   buyCardBack: (cardBackId: string) => void;
   selectCardBack: (cardBackId: string) => void;
   buyTableSkin: (tableSkinId: string) => void;
@@ -329,6 +332,7 @@ export function LobbyScreen({
   claimDailyMission: (missionId: string) => void;
   claimSeasonReward: (rewardId: string) => void;
   claimMilestoneReward: (rewardId: string) => void;
+  openTutorial: () => void;
 }) {
   const { width: screenWidth } = useWindowDimensions();
   const compactHome = screenWidth < 380;
@@ -344,6 +348,7 @@ export function LobbyScreen({
   const [settingsSavedMessage, setSettingsSavedMessage] = useState<string | null>(
     null
   );
+  const [hubNotice, setHubNotice] = useState<string | null>(null);
 
   const normalizedRoomCode = roomCodeInput
     .trim()
@@ -474,31 +479,6 @@ export function LobbyScreen({
     quickPlay();
   }
 
-  function openFriendsPreview() {
-    goToTab("social");
-    setShowSocial(true);
-  }
-
-  function handlePlatformFeaturePress(feature: PlatformFeatureKey) {
-    if (feature === "matchmaking") {
-      openMatchmaking();
-      return;
-    }
-
-    if (feature === "publicRooms") {
-      goToTab("social");
-      listPublicRooms();
-      return;
-    }
-
-    if (feature === "profiles") {
-      goToTab("profile");
-      return;
-    }
-
-    openFriendsPreview();
-  }
-
   function claimDailyRewardFromHome() {
     if (settings.hapticsEnabled) {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
@@ -526,6 +506,29 @@ export function LobbyScreen({
     joinPublicRoom(code);
   }
 
+  function handleHubPlayMode(mode: HubPlayMode) {
+    setHubNotice(null);
+
+    if (mode.key === "quick") {
+      if (!connected || isBusy || !profileReady) return;
+      quickPlay();
+      return;
+    }
+
+    if (mode.key === "friends") {
+      createRoomFromHome();
+      return;
+    }
+
+    if (mode.key === "publicRooms") {
+      goToTab("social");
+      if (connected && profileReady) listPublicRooms();
+      return;
+    }
+
+    setHubNotice(`${mode.title} komt later beschikbaar.`);
+  }
+
   const activeMission =
     dailyMissions.find((mission) => {
       const progress = getDailyMissionProgress(wallet, mission);
@@ -550,9 +553,13 @@ export function LobbyScreen({
     !!activeMission &&
     activeMissionProgress >= activeMission.target &&
     !wallet.dailyMissionClaims.includes(activeMission.id);
-  const homeFeatureCards = platformFeatureCards.filter((feature) =>
-    ["publicRooms", "friends"].includes(feature.key)
+  const primaryHubModes = hubPlayModes.filter((mode) =>
+    ["publicRooms"].includes(mode.key)
   );
+  const lockedHubModes = hubPlayModes.filter((mode) =>
+    ["ranked", "tournament"].includes(mode.key)
+  );
+  const quickHubMode = hubPlayModes.find((mode) => mode.key === "quick")!;
   const tabOrder: BottomNavKey[] = ["play", "social", "shop", "rules", "profile"];
   const tabSwipeResponder = useMemo(
     () =>
@@ -639,7 +646,7 @@ export function LobbyScreen({
                   : "Offline"}
               </Text>
               <Text style={styles.connectionHelpText}>
-                Server wordt wakker of je verbinding herstelt. Dit kan 30-60 sec duren.
+                Verbinding herstellen. Dit kan even duren.
               </Text>
             </View>
             <Pressable style={styles.connectionRetryButton} onPress={retryConnection}>
@@ -658,13 +665,13 @@ export function LobbyScreen({
           <View style={styles.loadingBanner}>
             <Text style={styles.loadingBannerText}>
               {creatingRoom
-                ? "Kamer openen..."
+                ? "Tafel openen..."
                 : joiningRoom
-                ? "Kamer zoeken..."
+                ? "Tafel zoeken..."
                 : quickPlaying
                 ? "Online tafel zoeken..."
                 : joiningPublicRoom
-                ? "Open tafel joinen..."
+                ? "Meedoen met open tafel..."
                 : "Even verwerken..."}
             </Text>
           </View>
@@ -673,6 +680,12 @@ export function LobbyScreen({
         {economyNotice && activeTab !== "shop" ? (
           <Pressable style={styles.economyNotice} onPress={clearEconomyNotice}>
             <Text style={styles.economyNoticeText}>{economyNotice}</Text>
+          </Pressable>
+        ) : null}
+
+        {hubNotice ? (
+          <Pressable style={styles.economyNotice} onPress={() => setHubNotice(null)}>
+            <Text style={styles.economyNoticeText}>{hubNotice}</Text>
           </Pressable>
         ) : null}
 
@@ -690,6 +703,38 @@ export function LobbyScreen({
           <View style={styles.homeBody} {...tabSwipeResponder.panHandlers}>
             {activeTab === "play" ? (
               <View style={[styles.tabPage, compactHome && styles.tabPageCompact]}>
+                <Pressable
+                  style={[
+                    styles.homeQuickPlayCard,
+                    quickPlaying && styles.homeQuickPlayCardActive,
+                    (!connected || isBusy || !profileReady) && styles.disabledButton,
+                  ]}
+                  onPress={() => handleHubPlayMode(quickHubMode)}
+                  disabled={!connected || isBusy || !profileReady}
+                >
+                  <View style={styles.homeQuickPlayCopy}>
+                    <View style={styles.homeQuickPlayTitleRow}>
+                      <Text style={styles.homeQuickPlayTitle}>
+                        Snel online spelen
+                      </Text>
+                      <View style={styles.homeQuickPlayBadge}>
+                        <Text style={styles.homeQuickPlayBadgeText}>Live</Text>
+                      </View>
+                    </View>
+                    <Text style={styles.homeQuickPlayText}>
+                      {quickPlaying
+                        ? "Online tafel zoeken..."
+                        : matchmakingStatus ?? "Zoek automatisch een beschikbare tafel."}
+                    </Text>
+                  </View>
+
+                  <View style={styles.homeQuickPlayButton}>
+                    <Text style={styles.homeQuickPlayButtonText}>
+                      {quickPlaying ? "..." : "Snelspel"}
+                    </Text>
+                  </View>
+                </Pressable>
+
                 <LinearGradient
                   colors={["#10201d", "#152823", "#10201d"]}
                   style={[
@@ -849,38 +894,6 @@ export function LobbyScreen({
                   </Pressable>
                 </LinearGradient>
 
-                <Pressable
-                  style={[
-                    styles.homeQuickPlayCard,
-                    quickPlaying && styles.homeQuickPlayCardActive,
-                    (!connected || isBusy || !profileReady) && styles.disabledButton,
-                  ]}
-                  onPress={openMatchmaking}
-                  disabled={!connected || isBusy || !profileReady}
-                >
-                  <View style={styles.homeQuickPlayCopy}>
-                    <View style={styles.homeQuickPlayTitleRow}>
-                      <Text style={styles.homeQuickPlayTitle}>
-                        Snel online spelen
-                      </Text>
-                      <View style={styles.homeQuickPlayBadge}>
-                        <Text style={styles.homeQuickPlayBadgeText}>Live</Text>
-                      </View>
-                    </View>
-                    <Text style={styles.homeQuickPlayText}>
-                      {quickPlaying
-                        ? "Online tafel zoeken..."
-                        : matchmakingStatus ?? "Zoek automatisch een beschikbare tafel."}
-                    </Text>
-                  </View>
-
-                  <View style={styles.homeQuickPlayButton}>
-                    <Text style={styles.homeQuickPlayButtonText}>
-                      {quickPlaying ? "..." : "Snelspel"}
-                    </Text>
-                  </View>
-                </Pressable>
-
                 <View
                   style={[
                     styles.gameJoinPanel,
@@ -927,7 +940,7 @@ export function LobbyScreen({
                       disabled={!connected || !roomCodeReady || isBusy || !profileReady}
                     >
                       <Text style={styles.gameJoinButtonText}>
-                        {joiningRoom ? "..." : "Join"}
+                        {joiningRoom ? "..." : "Meedoen"}
                       </Text>
                     </Pressable>
                   </View>
@@ -941,20 +954,20 @@ export function LobbyScreen({
                   ]}
                 >
                   <SectionHeader
-                    title="Online opties"
-                    subtitle="Zoeken, open tafels en vrienden blijven klaar voor later."
+                    title="Spelmodi"
+                    subtitle="Open tafels en toekomstige competities."
                     actionLabel="Sociaal"
                     onAction={openSocial}
                   />
 
                   <View style={styles.gameModeGrid}>
-                    {homeFeatureCards.map((feature) => (
+                    {[...primaryHubModes, ...lockedHubModes].map((feature) => (
                       <GameModeCard
                         key={feature.key}
                         badge={feature.badge}
                         icon={feature.icon}
                         tone={feature.tone}
-                        onPress={() => handlePlatformFeaturePress(feature.key)}
+                        onPress={() => handleHubPlayMode(feature)}
                         subtitle={feature.subtitle}
                         title={feature.title}
                       />
@@ -972,7 +985,7 @@ export function LobbyScreen({
                   <SectionHeader
                     title="Vandaag"
                     subtitle="Beloningen en voortgang zonder drukte."
-                    actionLabel="Shop"
+                    actionLabel="Markt"
                     onAction={openShop}
                   />
 
@@ -992,7 +1005,7 @@ export function LobbyScreen({
                     >
                       <Image source={gemImage} style={styles.gameRewardIcon} />
                       <View style={styles.gameRewardCopy}>
-                        <Text style={styles.gameRewardTitle}>Daily</Text>
+                        <Text style={styles.gameRewardTitle}>Dagelijks</Text>
                         <Text style={styles.gameRewardText}>
                           {canClaimDailyGems
                             ? `+${DAILY_GEMS} gems klaar`
@@ -1037,7 +1050,7 @@ export function LobbyScreen({
                         />
                       </View>
                       <Text style={styles.gameMissionReward}>
-                        {activeMissionReady ? "Claim reward" : "Missie"}
+                        {activeMissionReady ? "Claimen" : "Missie"}
                       </Text>
                     </Pressable>
                     ) : null}
@@ -1083,7 +1096,7 @@ export function LobbyScreen({
                     <Text style={styles.publicRoomPreviewTitle}>Open tafels</Text>
                     <Pressable onPress={listPublicRooms} disabled={listingPublicRooms}>
                       <Text style={styles.publicRoomPreviewMeta}>
-                        {listingPublicRooms ? "Laden..." : "Refresh"}
+                        {listingPublicRooms ? "Laden..." : "Vernieuwen"}
                       </Text>
                     </Pressable>
                   </View>
@@ -1131,7 +1144,7 @@ export function LobbyScreen({
                       </View>
                       <View style={styles.friendPreviewButton}>
                         <Text style={styles.friendPreviewButtonText}>
-                          Join
+                          Meedoen
                         </Text>
                       </View>
                     </Pressable>
@@ -1163,7 +1176,7 @@ export function LobbyScreen({
                     <View style={styles.socialProfileCopy}>
                       <Text style={styles.socialProfileName}>{displayName}</Text>
                       <Text style={styles.socialProfileText}>
-                        Lokale stats zijn actief. Invites komen later.
+                        Lokale statistieken zijn actief. Uitnodigingen komen later.
                       </Text>
                     </View>
                   </View>
@@ -1193,7 +1206,7 @@ export function LobbyScreen({
                         </Text>
                       </View>
                       <View style={styles.friendPreviewButton}>
-                        <Text style={styles.friendPreviewButtonText}>Invite later</Text>
+                        <Text style={styles.friendPreviewButtonText}>Later uitnodigen</Text>
                       </View>
                     </View>
                   ))}
@@ -1227,7 +1240,7 @@ export function LobbyScreen({
                 <SurfaceCard subdued style={styles.tabHeroCard}>
                   <SectionHeader
                     title="Markt"
-                    subtitle="Cosmetics, rewards en valuta overzichtelijk bij elkaar."
+                    subtitle="Cosmetica, beloningen en valuta overzichtelijk bij elkaar."
                   />
                 </SurfaceCard>
 
@@ -1246,6 +1259,7 @@ export function LobbyScreen({
                   canClaimDailyGems={canClaimDailyGems}
                   previewPremiumPass={previewPremiumPass}
                   previewGemPurchase={previewGemPurchase}
+                  previewRewardedAd={previewRewardedAd}
                   buyCardBack={buyCardBack}
                   selectCardBack={selectCardBack}
                   buyTableSkin={buyTableSkin}
@@ -1267,6 +1281,8 @@ export function LobbyScreen({
                   <SectionHeader
                     title="Spelregels"
                     subtitle="Volledige Pesten-variant, kort en scanbaar."
+                    actionLabel="Tutorial"
+                    onAction={openTutorial}
                   />
                 </SurfaceCard>
                 {pestenRuleSections.map((section) => (
@@ -1280,7 +1296,7 @@ export function LobbyScreen({
                 <SurfaceCard subdued style={styles.tabHeroCard}>
                   <SectionHeader
                     title="Profiel"
-                    subtitle="Stats lokaal bewaard; vrienden komen later met accounts."
+                    subtitle="Statistieken lokaal bewaard; vrienden komen later met accounts."
                   />
                 </SurfaceCard>
 
@@ -1288,7 +1304,7 @@ export function LobbyScreen({
                   <View style={styles.socialProfileCard}>
                     <View style={styles.socialProfileLevel}>
                       <Text style={styles.socialProfileLevelText}>
-                        Lv {profileFoundation.level}
+                        Niveau {profileFoundation.level}
                       </Text>
                     </View>
                     <View style={styles.socialProfileCopy}>
@@ -1341,7 +1357,7 @@ export function LobbyScreen({
 
                   <View style={styles.settingsGroup}>
                     <SettingSwitch
-                      label="Haptics"
+                      label="Vibratie"
                       enabled={draftSettings.hapticsEnabled}
                       onPress={() =>
                         updateDraftSettings({
@@ -1350,7 +1366,7 @@ export function LobbyScreen({
                       }
                     />
                     <SettingSegment<CardSizeSetting>
-                      label="Kaarten"
+                      label="Kaartgrootte"
                       value={draftSettings.cardSize}
                       options={[
                         { label: "Compact", value: "compact" },
@@ -1384,6 +1400,12 @@ export function LobbyScreen({
                   </Text>
 
                   <GameButton
+                    label="Tutorial opnieuw bekijken"
+                    onPress={openTutorial}
+                    tone="secondary"
+                  />
+
+                  <GameButton
                     label={settingsSavedMessage ?? "Opslaan"}
                     onPress={saveProfileSettings}
                     disabled={!draftNameReady}
@@ -1398,8 +1420,8 @@ export function LobbyScreen({
           <View style={styles.modalOverlay}>
             <GameModalFrame
               eyebrow="Collectie"
-              title="Shop"
-              text="Unlock kaartbacks, tafels, avatars en frames."
+              title="Markt"
+              text="Ontgrendel kaartbacks, tafels, avatars en frames."
               onClose={() => setShowShop(false)}
               frameStyle={styles.shopModalCard}
             >
@@ -1426,6 +1448,7 @@ export function LobbyScreen({
                   canClaimDailyGems={canClaimDailyGems}
                   previewPremiumPass={previewPremiumPass}
                   previewGemPurchase={previewGemPurchase}
+                  previewRewardedAd={previewRewardedAd}
                   buyCardBack={buyCardBack}
                   selectCardBack={selectCardBack}
                   buyTableSkin={buyTableSkin}
@@ -1463,7 +1486,7 @@ export function LobbyScreen({
                   </Text>
                   <Text style={styles.featureModalTitle}>Zoeken staat klaar</Text>
                   <Text style={styles.featureModalText}>
-                    De UI is voorbereid. Backend matchmaking koppelen we later.
+                    De basis is voorbereid. Servermatching koppelen we later.
                   </Text>
                 </View>
               </View>
@@ -1503,9 +1526,9 @@ export function LobbyScreen({
         <Modal visible={showSocial} transparent animationType="fade">
           <View style={styles.modalOverlay}>
             <GameModalFrame
-              eyebrow="Social hub"
+              eyebrow="Sociaal"
               title="Vrienden"
-              text="Profielen, invites en vriendenlijst zijn voorbereid voor de live versie."
+              text="Profielen, uitnodigingen en vriendenlijst zijn voorbereid voor de live versie."
               variant="dark"
               onClose={() => setShowSocial(false)}
               frameStyle={styles.gameFeatureModalCard}
@@ -1532,8 +1555,8 @@ export function LobbyScreen({
                   </Text>
                 </View>
                 <View style={styles.featureModalCopy}>
-                  <Text style={styles.featureModalEyebrow}>Preview</Text>
-                  <Text style={styles.featureModalTitle}>Invite klaar</Text>
+                  <Text style={styles.featureModalEyebrow}>Voorbeeld</Text>
+                  <Text style={styles.featureModalTitle}>Uitnodiging klaar</Text>
                   <Text style={styles.featureModalText}>
                     Later kun je spelers toevoegen na een potje of direct uitnodigen.
                   </Text>
@@ -1544,13 +1567,13 @@ export function LobbyScreen({
                 <View style={styles.socialProfileCard}>
                   <View style={styles.socialProfileLevel}>
                     <Text style={styles.socialProfileLevelText}>
-                      Lv {season.level}
+                      Niveau {season.level}
                     </Text>
                   </View>
                   <View style={styles.socialProfileCopy}>
                     <Text style={styles.socialProfileName}>{displayName}</Text>
                     <Text style={styles.socialProfileText}>
-                      Profiel preview - later klikbaar voor stats en invite.
+                      Profielvoorbeeld - later klikbaar voor statistieken en uitnodigen.
                     </Text>
                   </View>
                 </View>
@@ -1591,7 +1614,7 @@ export function LobbyScreen({
             <GameModalFrame
               eyebrow="Profiel"
               title="Instellingen"
-              text="Naam, haptics, kaartgrootte en taal."
+              text="Naam, vibratie, kaartgrootte en taal."
               onClose={() => {
                 setDraftName(name);
                 setDraftSettings(settings);
@@ -1616,7 +1639,7 @@ export function LobbyScreen({
 
               <View style={styles.settingsGroup}>
                 <SettingSwitch
-                  label="Haptics"
+                  label="Vibratie"
                   enabled={draftSettings.hapticsEnabled}
                   onPress={() =>
                     updateDraftSettings({
@@ -1626,7 +1649,7 @@ export function LobbyScreen({
                 />
 
                 <SettingSegment<CardSizeSetting>
-                  label="Kaarten"
+                  label="Kaartgrootte"
                   value={draftSettings.cardSize}
                   options={[
                     { label: "Compact", value: "compact" },
@@ -1911,6 +1934,7 @@ function EconomyPanel({
   canClaimDailyGems,
   previewPremiumPass,
   previewGemPurchase,
+  previewRewardedAd,
   buyCardBack,
   selectCardBack,
   buyTableSkin,
@@ -1931,6 +1955,7 @@ function EconomyPanel({
   canClaimDailyGems: boolean;
   previewPremiumPass: () => void;
   previewGemPurchase: () => void;
+  previewRewardedAd: () => void;
   buyCardBack: (cardBackId: string) => void;
   selectCardBack: (cardBackId: string) => void;
   buyTableSkin: (tableSkinId: string) => void;
@@ -2049,7 +2074,7 @@ function EconomyPanel({
             <View>
               <Text style={styles.shopSectionTitle}>Valuta</Text>
               <Text style={styles.shopSectionSubtitle}>
-                Alleen wisselen is nu echt actief. Aankopen met geld blijven bewust placeholder.
+                Alleen wisselen is nu echt actief. Aankopen met geld blijven bewust tijdelijk.
               </Text>
             </View>
 
@@ -2063,7 +2088,7 @@ function EconomyPanel({
               />
               <ShopProductCard
                 title="Gems kopen"
-                text="Later via Apple/Google in-app purchases."
+                text="Binnenkort via App Store / Google Play."
                 actionLabel="Binnenkort"
                 image={gemImage}
                 onPress={previewGemPurchase}
@@ -2071,9 +2096,16 @@ function EconomyPanel({
               />
               <ShopProductCard
                 title="Premium pass"
-                text="Season rewards en premium cosmetics later."
+                text="Seizoensbeloningen en premium cosmetica komen later."
                 actionLabel="Later"
                 onPress={previewPremiumPass}
+                placeholder
+              />
+              <ShopProductCard
+                title="Beloningsadvertentie"
+                text="Advertenties later beschikbaar."
+                actionLabel="Later"
+                onPress={previewRewardedAd}
                 placeholder
               />
             </View>
@@ -2160,7 +2192,7 @@ function EconomyPanel({
               onPress={() => chooseCardBackFilter("owned")}
             />
             <FilterChip
-              label={`Slot ${cardBackStats.locked}`}
+              label={`Vergrendeld ${cardBackStats.locked}`}
               active={cardBackFilter === "locked"}
               onPress={() => chooseCardBackFilter("locked")}
             />
@@ -2277,12 +2309,12 @@ function EconomyPanel({
         <View style={styles.shopSection}>
           <View style={styles.seasonHeader}>
             <View>
-              <Text style={styles.seasonEyebrow}>Season 1</Text>
+              <Text style={styles.seasonEyebrow}>Seizoen 1</Text>
               <Text style={styles.seasonTitle}>Royal Table</Text>
             </View>
 
             <View style={styles.seasonLevelBadge}>
-              <Text style={styles.seasonLevelText}>Level {season.level}</Text>
+              <Text style={styles.seasonLevelText}>Niveau {season.level}</Text>
             </View>
           </View>
 
@@ -2296,14 +2328,14 @@ function EconomyPanel({
           </View>
 
           <Text style={styles.seasonProgressText}>
-            {season.progressXp}/100 XP naar level{" "}
+            {season.progressXp}/100 XP naar niveau{" "}
             {Math.min(season.level + 1, 20)}
           </Text>
 
           <Pressable style={styles.premiumPassCard} onPress={previewPremiumPass}>
             <Text style={styles.premiumPassTitle}>Premium pass</Text>
             <Text style={styles.premiumPassText}>
-              Later via Apple/Google.
+              Binnenkort via App Store / Google Play.
             </Text>
           </Pressable>
 
@@ -2323,7 +2355,7 @@ function EconomyPanel({
                   ]}
                   onPress={() => claimSeasonReward(reward.id)}
                 >
-                  <Text style={styles.rewardLevel}>Level {reward.level}</Text>
+                  <Text style={styles.rewardLevel}>Niveau {reward.level}</Text>
                   <Text style={styles.rewardTitle}>{reward.title}</Text>
                   <Text style={styles.rewardMeta}>
                     {claimed
@@ -2331,8 +2363,8 @@ function EconomyPanel({
                       : premiumLocked
                       ? "Premium"
                       : locked
-                      ? "Locked"
-                      : "Claim"}
+                      ? "Vergrendeld"
+                      : "Claimen"}
                   </Text>
                 </Pressable>
               );
@@ -2378,11 +2410,11 @@ function DailyRewardBanner({
       disabled={!canClaimDailyGems}
     >
       <View style={styles.dailyRewardCopy}>
-        <Text style={styles.dailyRewardTitle}>Daily reward</Text>
+        <Text style={styles.dailyRewardTitle}>Dagelijkse beloning</Text>
         <Text style={styles.dailyRewardText}>
           {canClaimDailyGems
             ? `Vandaag klaar: +${DAILY_GEMS} gems`
-            : "Vandaag geclaimd. Morgen staat er weer een reward klaar."}
+            : "Vandaag geclaimd. Morgen staat er weer een beloning klaar."}
         </Text>
       </View>
       <View
@@ -2392,7 +2424,7 @@ function DailyRewardBanner({
         ]}
       >
         <Text style={styles.dailyRewardValue}>
-          {canClaimDailyGems ? "Claim" : "Geclaimd"}
+          {canClaimDailyGems ? "Claimen" : "Geclaimd"}
         </Text>
       </View>
     </Pressable>
@@ -2542,7 +2574,7 @@ function TableSkinShopItem({
         {tableSkin.title}
       </Text>
       <Text style={styles.tableSkinMeta}>
-        {owned ? tableSkin.rarity : `${priceCoins} coins`}
+        {owned ? getRarityLabel(tableSkin.rarity) : `${priceCoins} coins`}
       </Text>
 
       <View
@@ -2568,7 +2600,7 @@ function CosmeticComingSoon({ title, text }: { title: string; text: string }) {
   return (
     <View style={styles.shopSection}>
       <View style={styles.comingSoonCard}>
-        <Text style={styles.comingSoonEyebrow}>Coming soon</Text>
+        <Text style={styles.comingSoonEyebrow}>Binnenkort</Text>
         <Text style={styles.comingSoonTitle}>{title}</Text>
         <Text style={styles.comingSoonText}>{text}</Text>
       </View>
@@ -2602,7 +2634,7 @@ function CardBackShowcase({ cardBack }: { cardBack: CardBackOption }) {
         <Text style={styles.cardBackShowcaseTitle}>{cardBack.title}</Text>
         <View style={styles.cardBackShowcaseBadge}>
           <Text style={styles.cardBackShowcaseBadgeText}>
-            {cardBack.rarity}
+            {getRarityLabel(cardBack.rarity)}
           </Text>
         </View>
       </View>
@@ -2732,10 +2764,19 @@ function getShopCtaLabel({
   if (selected) return "Actief";
   if (owned) return "Gebruik";
   if (premium) return "Binnenkort";
-  if (levelLocked) return `Level ${unlockLevel}`;
+  if (levelLocked) return `Niveau ${unlockLevel}`;
   if (canBuy) return "Koop";
 
   return `Nog ${Math.max(0, priceCoins - walletCoins)} coins`;
+}
+
+function getRarityLabel(rarity: string) {
+  if (rarity === "Starter") return "Starter";
+  if (rarity === "Common") return "Gewoon";
+  if (rarity === "Rare") return "Zeldzaam";
+  if (rarity === "Epic") return "Episch";
+
+  return rarity;
 }
 
 function AvatarShopItem({
@@ -2807,7 +2848,7 @@ function AvatarShopItem({
         {avatar.title}
       </Text>
       <Text style={styles.cosmeticMeta}>
-        {owned ? avatar.rarity : `${priceCoins} coins`}
+        {owned ? getRarityLabel(avatar.rarity) : `${priceCoins} coins`}
       </Text>
       <Text style={styles.cosmeticCta}>{ctaLabel}</Text>
     </Pressable>
@@ -2876,7 +2917,7 @@ function AvatarFrameShopItem({
         {frame.title}
       </Text>
       <Text style={styles.cosmeticMeta}>
-        {owned ? frame.rarity : `${priceCoins} coins`}
+        {owned ? getRarityLabel(frame.rarity) : `${priceCoins} coins`}
       </Text>
       <Text style={styles.cosmeticCta}>{ctaLabel}</Text>
     </Pressable>
@@ -2924,7 +2965,7 @@ function ShopPreviewModal({
 
     title = preview.item.title;
     description = preview.item.description;
-    rarity = preview.item.rarity;
+    rarity = getRarityLabel(preview.item.rarity);
     ctaLabel = getShopCtaLabel({
       ...state,
       premium: preview.item.premium,
@@ -2941,8 +2982,8 @@ function ShopPreviewModal({
     const state = getTableSkinShopState(preview.item, wallet);
 
     title = preview.item.title;
-    description = `${preview.item.rarity} tafel skin.`;
-    rarity = preview.item.rarity;
+    description = `${getRarityLabel(preview.item.rarity)} tafelstijl.`;
+    rarity = getRarityLabel(preview.item.rarity);
     ctaLabel = getShopCtaLabel({
       ...state,
       premium: preview.item.premium,
@@ -2959,7 +3000,7 @@ function ShopPreviewModal({
 
     title = preview.item.title;
     description = preview.item.description;
-    rarity = preview.item.rarity;
+    rarity = getRarityLabel(preview.item.rarity);
     ctaLabel = getShopCtaLabel({
       ...state,
       premium: preview.item.premium,
@@ -2977,7 +3018,7 @@ function ShopPreviewModal({
 
     title = preview.item.title;
     description = preview.item.description;
-    rarity = preview.item.rarity;
+    rarity = getRarityLabel(preview.item.rarity);
     ctaLabel = getShopCtaLabel({
       ...state,
       premium: preview.item.premium,
@@ -3076,7 +3117,7 @@ function ShopPreviewModal({
           disabled={!canInteract}
         />
 
-        <GameButton label="Sluit preview" onPress={onClose} tone="secondary" />
+        <GameButton label="Sluit voorbeeld" onPress={onClose} tone="secondary" />
       </GameModalFrame>
     </View>
   );
@@ -3106,7 +3147,7 @@ function FeaturedCardBackDeal({
     : canBuy
     ? "Koop nu"
     : levelLocked
-    ? `Level ${cardBack.unlockLevel}`
+    ? `Niveau ${cardBack.unlockLevel}`
     : `${Math.max(0, priceCoins - wallet.coins)} coins tekort`;
 
   function handlePress() {
@@ -3144,7 +3185,7 @@ function FeaturedCardBackDeal({
           {cardBack.title}
         </Text>
         <Text style={styles.shopFeatureMeta}>
-          {owned ? cardBack.rarity : `${priceCoins} coins`}
+          {owned ? getRarityLabel(cardBack.rarity) : `${priceCoins} coins`}
         </Text>
       </View>
 
@@ -3194,7 +3235,7 @@ function CardBackShopItem({
     : cardBack.premium
     ? "Binnenkort"
     : levelLocked
-    ? `Lv ${cardBack.unlockLevel}`
+    ? `Niv. ${cardBack.unlockLevel}`
     : canBuy
     ? "Koop"
     : `Nog ${missingCoins}`;
@@ -3222,7 +3263,7 @@ function CardBackShopItem({
           resizeMode="cover"
         />
         <View style={styles.cardBackRarityBadge}>
-          <Text style={styles.cardBackRarityText}>{cardBack.rarity}</Text>
+          <Text style={styles.cardBackRarityText}>{getRarityLabel(cardBack.rarity)}</Text>
         </View>
       </View>
 
@@ -3316,7 +3357,7 @@ function DailyMissionCard({
           {progress}/{mission.target}
         </Text>
         <Text style={styles.milestoneActionText}>
-          {claimed ? "Geclaimd" : ready ? "Claim" : "Vandaag"}
+          {claimed ? "Geclaimd" : ready ? "Claimen" : "Vandaag"}
         </Text>
       </View>
     </Pressable>
@@ -3375,7 +3416,7 @@ function MilestoneRewardCard({
           {progress}/{reward.target}
         </Text>
         <Text style={styles.milestoneActionText}>
-          {claimed ? "Geclaimd" : ready ? "Claim" : "Bezig"}
+          {claimed ? "Geclaimd" : ready ? "Claimen" : "Bezig"}
         </Text>
       </View>
     </Pressable>
